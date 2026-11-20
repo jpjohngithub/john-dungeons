@@ -1,0 +1,166 @@
+[
+  {
+    "id": "recipe_bandage",
+    "name": "Bandage",
+    "ingredients": [
+      { "itemId": "item_cloth", "amount": 2 }
+    ],
+    "result": { "itemId": "item_bandage", "amount": 1 },
+    "craftTime": 2.0,
+    "requiredStation": "None"
+  },
+  {
+    "id": "recipe_ammo_pack",
+    "name": "Ammo Pack",
+    "ingredients": [
+      { "itemId": "item_scrap", "amount": 4 },
+      { "itemId": "item_gunpowder", "amount": 2 }
+    ],
+    "result": { "itemId": "item_ammo_pack", "amount": 1 },
+    "craftTime": 3.0,
+    "requiredStation": "None"
+  },
+  {
+    "id": "recipe_campfire",
+    "name": "Campfire",
+    "ingredients": [
+      { "itemId": "item_wood", "amount": 5 },
+      { "itemId": "item_stone", "amount": 3 }
+    ],
+    "result": { "itemId": "item_campfire", "amount": 1 },
+    "craftTime": 4.0,
+    "requiredStation": "None"
+  },
+  {
+    "id": "recipe_barricade",
+    "name": "Barricade",
+    "ingredients": [
+      { "itemId": "item_wood", "amount": 8 },
+      { "itemId": "item_scrap", "amount": 2 }
+    ],
+    "result": { "itemId": "item_barricade", "amount": 1 },
+    "craftTime": 5.0,
+    "requiredStation": "None"
+  },
+  {
+    "id": "recipe_workbench",
+    "name": "Workbench",
+    "ingredients": [
+      { "itemId": "item_wood", "amount": 15 },
+      { "itemId": "item_scrap", "amount": 10 },
+      { "itemId": "item_stone", "amount": 5 }
+    ],
+    "result": { "itemId": "item_workbench", "amount": 1 },
+    "craftTime": 10.0,
+    "requiredStation": "None"
+  },
+  {
+    "id": "recipe_shield_potion",
+    "name": "Shield Potion",
+    "ingredients": [
+      { "itemId": "item_chemical", "amount": 2 },
+      { "itemId": "item_glass", "amount": 1 }
+    ],
+    "result": { "itemId": "item_shield_potion", "amount": 1 },
+    "craftTime": 4.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_speed_potion",
+    "name": "Speed Potion",
+    "ingredients": [
+      { "itemId": "item_herb", "amount": 3 },
+      { "itemId": "item_water", "amount": 1 }
+    ],
+    "result": { "itemId": "item_speed_potion", "amount": 1 },
+    "craftTime": 4.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_weapon_mod_scope",
+    "name": "Weapon Mod (Scope)",
+    "ingredients": [
+      { "itemId": "item_scrap", "amount": 6 },
+      { "itemId": "item_glass", "amount": 2 }
+    ],
+    "result": { "itemId": "item_mod_scope", "amount": 1 },
+    "craftTime": 6.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_weapon_mod_mag",
+    "name": "Weapon Mod (Extended Mag)",
+    "ingredients": [
+      { "itemId": "item_scrap", "amount": 8 },
+      { "itemId": "item_spring", "amount": 2 }
+    ],
+    "result": { "itemId": "item_mod_extended_mag", "amount": 1 },
+    "craftTime": 6.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_armor_plate",
+    "name": "Armor Plate",
+    "ingredients": [
+      { "itemId": "item_scrap", "amount": 10 },
+      { "itemId": "item_chemical", "amount": 1 }
+    ],
+    "result": { "itemId": "item_armor_plate", "amount": 1 },
+    "craftTime": 5.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_warm_coat",
+    "name": "Warm Coat",
+    "ingredients": [
+      { "itemId": "item_leather", "amount": 6 },
+      { "itemId": "item_cloth", "amount": 4 }
+    ],
+    "result": { "itemId": "item_warm_coat", "amount": 1 },
+    "craftTime": 8.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_cooked_meat",
+    "name": "Cooked Meat",
+    "ingredients": [
+      { "itemId": "item_raw_meat", "amount": 1 }
+    ],
+    "result": { "itemId": "item_cooked_meat", "amount": 1 },
+    "craftTime": 3.0,
+    "requiredStation": "Campfire"
+  },
+  {
+    "id": "recipe_water_purifier",
+    "name": "Water Purifier",
+    "ingredients": [
+      { "itemId": "item_scrap", "amount": 5 },
+      { "itemId": "item_charcoal", "amount": 3 }
+    ],
+    "result": { "itemId": "item_water_purifier", "amount": 1 },
+    "craftTime": 6.0,
+    "requiredStation": "Workbench"
+  },
+  {
+    "id": "recipe_trap",
+    "name": "Trap",
+    "ingredients": [
+      { "itemId": "item_scrap", "amount": 5 },
+      { "itemId": "item_spring", "amount": 1 }
+    ],
+    "result": { "itemId": "item_trap", "amount": 1 },
+    "craftTime": 4.0,
+    "requiredStation": "None"
+  },
+  {
+    "id": "recipe_signal_flare",
+    "name": "Signal Flare",
+    "ingredients": [
+      { "itemId": "item_gunpowder", "amount": 2 },
+      { "itemId": "item_chemical", "amount": 1 }
+    ],
+    "result": { "itemId": "item_signal_flare", "amount": 1 },
+    "craftTime": 3.0,
+    "requiredStation": "None"
+  }
+]

@@ -1,0 +1,37 @@
+[
+  {
+    "tier": "low",
+    "items": [
+      { "itemId": "item_scrap", "weight": 40, "minQuantity": 1, "maxQuantity": 3 },
+      { "itemId": "item_wood", "weight": 35, "minQuantity": 2, "maxQuantity": 5 },
+      { "itemId": "item_cloth", "weight": 30, "minQuantity": 1, "maxQuantity": 2 },
+      { "itemId": "item_bandage", "weight": 25, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_pistol", "weight": 10, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_bow", "weight": 10, "minQuantity": 1, "maxQuantity": 1 }
+    ]
+  },
+  {
+    "tier": "medium",
+    "items": [
+      { "itemId": "item_scrap", "weight": 30, "minQuantity": 3, "maxQuantity": 8 },
+      { "itemId": "item_gunpowder", "weight": 25, "minQuantity": 1, "maxQuantity": 3 },
+      { "itemId": "item_chemical", "weight": 20, "minQuantity": 1, "maxQuantity": 2 },
+      { "itemId": "item_shield_potion", "weight": 20, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_shotgun", "weight": 18, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_assault_rifle", "weight": 15, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_revolver", "weight": 12, "minQuantity": 1, "maxQuantity": 1 }
+    ]
+  },
+  {
+    "tier": "high",
+    "items": [
+      { "itemId": "item_chemical", "weight": 30, "minQuantity": 2, "maxQuantity": 5 },
+      { "itemId": "item_armor_plate", "weight": 25, "minQuantity": 1, "maxQuantity": 2 },
+      { "itemId": "item_shield_potion", "weight": 25, "minQuantity": 1, "maxQuantity": 2 },
+      { "itemId": "weapon_lmg", "weight": 15, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_plasma_rifle", "weight": 15, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_sniper_rifle", "weight": 10, "minQuantity": 1, "maxQuantity": 1 },
+      { "itemId": "weapon_rocket_launcher", "weight": 8, "minQuantity": 1, "maxQuantity": 1 }
+    ]
+  }
+]
