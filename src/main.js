@@ -140,6 +140,66 @@ class SoundFX {
         osc.start(now);
         osc.stop(now + 0.35);
     }
+    playMissile() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(350, now);
+        osc.frequency.exponentialRampToValueAtTime(950, now + 0.22);
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.22);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.22);
+    }
+    playBlink() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(1050, now);
+        osc.frequency.exponentialRampToValueAtTime(260, now + 0.16);
+        gain.gain.setValueAtTime(0.3, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.16);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.16);
+    }
+    playSlam() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(110, now);
+        osc.frequency.exponentialRampToValueAtTime(25, now + 0.55);
+        gain.gain.setValueAtTime(0.55, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.55);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.55);
+    }
+    playStealth() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(700, now);
+        osc.frequency.linearRampToValueAtTime(320, now + 0.35);
+        gain.gain.setValueAtTime(0.2, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+    }
 }
 const sfx = new SoundFX();
 
@@ -160,7 +220,7 @@ let selectedClass = 'ASSAULT';
 let kills = 0, materials = 150;
 let lastShotTime = 0;
 
-// Hand Laser & Super Flight State
+// Abilities State for all Characters
 let isLaserActive = false;
 let laserTimer = 0;
 let laserCooldown = 0;
@@ -168,6 +228,22 @@ let laserMesh = null;
 let laserLight = null;
 let superFlightTimer = 0;
 let superCooldown = 0;
+
+// Titan Abilities
+let activeMissiles = [];
+let titanMissileCd = 0;
+let titanSlamCd = 0;
+let isTitanSlamming = false;
+
+// Ghost Recon Abilities
+let ghostBlinkCd = 0;
+let ghostStealthCd = 0;
+let isGhostStealth = false;
+let ghostStealthTimer = 0;
+
+// Lobby Pedestal & Camera
+let lobbyPedestal = null;
+let lobbySpotLight = null;
 
 // Modular Building State
 let isBuildMode = false;
@@ -257,6 +333,8 @@ function init() {
     playerController = new PlayerController(camera, inputManager, scene);
     playerController.position.copy(playerGroup.position);
     playerController.setObstacles(allObstacles);
+    playerController.setGroundHeightFn(getTerrainHeight);
+    createLobbyPedestal();
     cameraController = new CameraController(camera, inputManager, scene);
     cameraController.attach(playerGroup);
     cameraController.setCollisionObjects([terrain, cityData.group, ...rocks, ...trees]);
@@ -430,12 +508,20 @@ function createVegetation(bushCount, grassCount) {
 }
 
 function getTerrainHeight(x, z) {
+    const dist = Math.sqrt(x * x + z * z);
+    // Flat urban basin for city center (buildings & roads lie on y=0 with zero terrain clipping)
+    if (dist < 95) return 0.0;
+
     let h = 0;
     h += Math.sin(x * 0.015) * Math.cos(z * 0.015) * 9;
     h += Math.sin(x * 0.04 + 1.2) * Math.cos(z * 0.05 + 2.1) * 3.5;
     h += Math.sin(x * 0.12 + 3.0) * Math.cos(z * 0.10) * 1.0;
-    const dist = Math.sqrt(x * x + z * z);
-    if (dist < 40) h *= dist / 40;
+
+    // Smooth transition from city perimeter (95m) to outer mountains (135m)
+    if (dist < 135) {
+        const factor = (dist - 95) / 40.0;
+        return h * factor;
+    }
     return h;
 }
 
@@ -823,6 +909,335 @@ function updateSuperFlight(dt) {
     }
 }
 
+// ─── LOBBY PEDESTAL & SPOTLIGHT ────────────────────────────────────
+function createLobbyPedestal() {
+    lobbyPedestal = new THREE.Group();
+    
+    // Cylindrical stage
+    const baseGeo = new THREE.CylinderGeometry(2.2, 2.4, 0.18, 32);
+    const baseMat = new THREE.MeshStandardMaterial({
+        color: 0x111827,
+        metalness: 0.9,
+        roughness: 0.2
+    });
+    const baseMesh = new THREE.Mesh(baseGeo, baseMat);
+    baseMesh.position.y = 0.09;
+    baseMesh.receiveShadow = true;
+    lobbyPedestal.add(baseMesh);
+
+    // Glowing Neon Ring
+    const ringGeo = new THREE.TorusGeometry(2.1, 0.04, 16, 48);
+    ringGeo.rotateX(Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+    const ringMesh = new THREE.Mesh(ringGeo, ringMat);
+    ringMesh.position.y = 0.19;
+    lobbyPedestal.add(ringMesh);
+
+    // Inner Grid Circle
+    const innerGeo = new THREE.CircleGeometry(1.9, 32);
+    innerGeo.rotateX(-Math.PI / 2);
+    const innerMat = new THREE.MeshBasicMaterial({ color: 0x0284c7, wireframe: true, transparent: true, opacity: 0.4 });
+    const innerMesh = new THREE.Mesh(innerGeo, innerMat);
+    innerMesh.position.y = 0.195;
+    lobbyPedestal.add(innerMesh);
+
+    lobbyPedestal.position.set(0, 0, 0);
+    scene.add(lobbyPedestal);
+
+    // Overhead dramatic spotlight for lobby presentation
+    lobbySpotLight = new THREE.SpotLight(0xffffff, 4.5, 18, Math.PI / 4, 0.4, 1.2);
+    lobbySpotLight.position.set(0, 6.0, 2.5);
+    lobbySpotLight.target.position.set(0, 1.0, 0);
+    scene.add(lobbySpotLight);
+    scene.add(lobbySpotLight.target);
+}
+
+// ─── TITAN BRAWLER ABILITIES ─────────────────────────────────────────
+function triggerTitanMissiles() {
+    if (titanMissileCd > 0) {
+        showNotification(`Missiles Recharging... (${Math.ceil(titanMissileCd)}s)`);
+        return;
+    }
+    titanMissileCd = 7.0;
+    sfx.playMissile();
+    showNotification('TITAN MICRO-MISSILES LAUNCHED!');
+
+    const pp = playerGroup.position.clone();
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+
+    // Target nearest bot or camera forward point
+    let target = pp.clone().add(camDir.clone().multiplyScalar(45));
+    let minDist = 75;
+    for (const b of enemies) {
+        if (b.userData.isDead) continue;
+        const d = b.position.distanceTo(pp);
+        if (d < minDist) {
+            minDist = d;
+            target = b.position.clone().add(new THREE.Vector3(0, 1.0, 0));
+        }
+    }
+
+    const missileGeo = new THREE.CylinderGeometry(0.06, 0.08, 0.4, 8);
+    missileGeo.rotateX(Math.PI / 2);
+    const missileMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, emissive: 0xd97706, roughness: 0.3 });
+
+    for (let i = 0; i < 4; i++) {
+        const mesh = new THREE.Mesh(missileGeo, missileMat);
+        const side = i % 2 === 0 ? -0.45 : 0.45;
+        const up = 1.6 + Math.floor(i / 2) * 0.25;
+        mesh.position.set(pp.x + side, pp.y + up, pp.z);
+        scene.add(mesh);
+
+        const launchDir = new THREE.Vector3(side * 0.6, 1.2 + Math.random() * 0.5, camDir.z * 0.5).normalize();
+        activeMissiles.push({
+            mesh,
+            pos: mesh.position.clone(),
+            vel: launchDir.multiplyScalar(14),
+            target: target.clone().add(new THREE.Vector3((Math.random() - 0.5) * 3, 0, (Math.random() - 0.5) * 3)),
+            life: 3.5,
+            homingPower: 0.0
+        });
+    }
+}
+
+function updateMissiles(dt) {
+    if (titanMissileCd > 0) titanMissileCd -= dt;
+
+    for (let i = activeMissiles.length - 1; i >= 0; i--) {
+        const m = activeMissiles[i];
+        m.life -= dt;
+        m.homingPower = Math.min(1.0, m.homingPower + dt * 2.0);
+
+        // Homing turn towards target
+        const toTarget = m.target.clone().sub(m.pos).normalize();
+        m.vel.lerp(toTarget.multiplyScalar(28.0), m.homingPower * dt * 4.5);
+        m.pos.add(m.vel.clone().multiplyScalar(dt));
+        m.mesh.position.copy(m.pos);
+        m.mesh.lookAt(m.pos.clone().add(m.vel));
+
+        // Smoke & Spark Trail
+        if (Math.random() < 0.6) {
+            const pGeo = new THREE.BoxGeometry(0.09, 0.09, 0.09);
+            const pMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, transparent: true, opacity: 0.8 });
+            const pMesh = new THREE.Mesh(pGeo, pMat);
+            pMesh.position.copy(m.pos);
+            scene.add(pMesh);
+            particles.push({ mesh: pMesh, vel: new THREE.Vector3(0, 0.4, 0), life: 0.28 });
+        }
+
+        // Check Hit target or terrain or timeout
+        const distToTarget = m.pos.distanceTo(m.target);
+        const terrY = getTerrainHeight(m.pos.x, m.pos.z);
+        if (distToTarget < 1.4 || m.pos.y <= terrY || m.life <= 0) {
+            // Explode
+            sfx.playExplosion();
+            cameraController.addShake(0.18, 0.1);
+            spawnExplosionParticles(m.pos, 0xf59e0b);
+
+            // Area Damage
+            for (const b of enemies) {
+                if (b.userData.isDead) continue;
+                if (b.position.distanceTo(m.pos) < 6.5) {
+                    applyDamageToEnemy(b, 75, m.pos);
+                }
+            }
+
+            scene.remove(m.mesh);
+            activeMissiles.splice(i, 1);
+        }
+    }
+}
+
+function triggerTitanSlam() {
+    if (titanSlamCd > 0) {
+        showNotification(`Slam Recharging... (${Math.ceil(titanSlamCd)}s)`);
+        return;
+    }
+    titanSlamCd = 16.0;
+    isTitanSlamming = true;
+    sfx.playFlight();
+    showNotification('SUPER ACTIVATED: TITAN SEISMIC SLAM!');
+
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    camDir.y = 0;
+    camDir.normalize();
+
+    // Powerful leap upwards and forward
+    playerController.velocity.set(camDir.x * 12.0, 16.5, camDir.z * 12.0);
+    playerController.isGrounded = false;
+}
+
+function updateTitanSlam(dt) {
+    if (titanSlamCd > 0) titanSlamCd -= dt;
+
+    if (isTitanSlamming) {
+        // Rocket exhaust while in air
+        const pp = playerController.position;
+        const pGeo = new THREE.BoxGeometry(0.15, 0.15, 0.15);
+        const pMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
+        const pMesh = new THREE.Mesh(pGeo, pMat);
+        pMesh.position.set(pp.x, pp.y - 0.2, pp.z);
+        scene.add(pMesh);
+        particles.push({ mesh: pMesh, vel: new THREE.Vector3((Math.random() - 0.5) * 2, -6, (Math.random() - 0.5) * 2), life: 0.3 });
+
+        // Check landing impact
+        const ty = getTerrainHeight(pp.x, pp.z);
+        if (playerController.velocity.y <= 0 && pp.y <= ty + 1.1) {
+            isTitanSlamming = false;
+            sfx.playSlam();
+            cameraController.addShake(0.55, 0.45);
+
+            // Shockwave Expanding Ring VFX
+            const shockGeo = new THREE.RingGeometry(0.4, 1.8, 32);
+            shockGeo.rotateX(-Math.PI / 2);
+            const shockMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b, side: THREE.DoubleSide, transparent: true, opacity: 0.9 });
+            const shockMesh = new THREE.Mesh(shockGeo, shockMat);
+            shockMesh.position.set(pp.x, ty + 0.1, pp.z);
+            scene.add(shockMesh);
+
+            particles.push({
+                mesh: shockMesh,
+                vel: new THREE.Vector3(0, 0, 0),
+                life: 0.7,
+                update: (d, p) => {
+                    shockMesh.scale.addScalar(d * 22.0);
+                    shockMat.opacity = (p.life / 0.7) * 0.9;
+                }
+            });
+
+            // Heavy Area Damage (140 damage in 16m radius)
+            for (const b of enemies) {
+                if (b.userData.isDead) continue;
+                const dist = b.position.distanceTo(pp);
+                if (dist < 16.0) {
+                    const dmg = Math.round(140 * (1 - dist / 16.0) + 30);
+                    applyDamageToEnemy(b, dmg, b.position);
+                }
+            }
+            showNotification('SEISMIC SHOCKWAVE DETONATED!');
+        }
+    }
+}
+
+// ─── GHOST RECON ABILITIES ──────────────────────────────────────────
+function triggerGhostBlink() {
+    if (ghostBlinkCd > 0) {
+        showNotification(`Blink Recharging... (${Math.ceil(ghostBlinkCd)}s)`);
+        return;
+    }
+    ghostBlinkCd = 5.0;
+    sfx.playBlink();
+
+    const startPos = playerController.position.clone();
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+    camDir.y = 0;
+    camDir.normalize();
+
+    // 14m instant teleport forward
+    const targetPos = startPos.clone().add(camDir.multiplyScalar(14.0));
+    const targetY = getTerrainHeight(targetPos.x, targetPos.z);
+    targetPos.y = targetY + 0.9;
+
+    // Leave Hologram After-Images along the path
+    for (let step = 1; step <= 3; step++) {
+        const fraction = step / 4;
+        const holoPos = startPos.clone().lerp(targetPos, fraction);
+        const holoGeo = new THREE.BoxGeometry(0.6, 1.6, 0.4);
+        const holoMat = new THREE.MeshBasicMaterial({ color: 0xef4444, wireframe: true, transparent: true, opacity: 0.8 });
+        const holoMesh = new THREE.Mesh(holoGeo, holoMat);
+        holoMesh.position.copy(holoPos).add(new THREE.Vector3(0, 0.8, 0));
+        scene.add(holoMesh);
+        particles.push({
+            mesh: holoMesh,
+            vel: new THREE.Vector3(0, 0.2, 0),
+            life: 0.45,
+            update: (d, p) => { holoMat.opacity = (p.life / 0.45) * 0.8; }
+        });
+    }
+
+    playerController.position.copy(targetPos);
+    cameraController.addShake(0.15, 0.1);
+    showNotification('GHOST SHADOW BLINK!');
+}
+
+function triggerGhostStealth() {
+    if (ghostStealthCd > 0) {
+        showNotification(`Stealth Recharging... (${Math.ceil(ghostStealthCd)}s)`);
+        return;
+    }
+    ghostStealthCd = 18.0;
+    isGhostStealth = true;
+    ghostStealthTimer = 8.0;
+    sfx.playStealth();
+
+    // Set character materials transparent
+    playerGroup.traverse((child) => {
+        if (child.isMesh && child.material) {
+            child.material.transparent = true;
+            child.material.opacity = 0.22;
+        }
+    });
+
+    // Speed boost during stealth
+    playerController.sprintSpeed = 13.5;
+    playerController.walkSpeed = 7.5;
+    showNotification('CHRONO STEALTH ENGAGED! (+100% Speed & Invisibility)');
+}
+
+function updateGhostStealth(dt) {
+    if (ghostStealthCd > 0) ghostStealthCd -= dt;
+
+    if (isGhostStealth) {
+        ghostStealthTimer -= dt;
+
+        // Dark Shadow Smoke Puffs
+        if (Math.random() < 0.4) {
+            const pp = playerController.position;
+            const pGeo = new THREE.SphereGeometry(0.25, 4, 4);
+            const pMat = new THREE.MeshBasicMaterial({ color: 0x1e1b4b, transparent: true, opacity: 0.6 });
+            const pMesh = new THREE.Mesh(pGeo, pMat);
+            pMesh.position.set(pp.x + (Math.random() - 0.5) * 0.4, pp.y + 0.3, pp.z + (Math.random() - 0.5) * 0.4);
+            scene.add(pMesh);
+            particles.push({
+                mesh: pMesh,
+                vel: new THREE.Vector3(0, 0.6, 0),
+                life: 0.4,
+                update: (d, p) => { pMesh.scale.addScalar(d * 1.5); pMat.opacity = (p.life / 0.4) * 0.6; }
+            });
+        }
+
+        if (ghostStealthTimer <= 0) {
+            isGhostStealth = false;
+            // Restore normal opacity
+            playerGroup.traverse((child) => {
+                if (child.isMesh && child.material) {
+                    child.material.opacity = 1.0;
+                }
+            });
+            playerController.sprintSpeed = 7.8;
+            playerController.walkSpeed = 4.2;
+            showNotification('Stealth Cloak Deactivated.');
+        }
+    }
+}
+
+// Universal Ability Routers
+function triggerAbility1() {
+    if (selectedCharacter === 'CYBER_STRIKER') triggerHandLaser();
+    else if (selectedCharacter === 'TITAN_BRAWLER') triggerTitanMissiles();
+    else if (selectedCharacter === 'GHOST_RECON') triggerGhostBlink();
+}
+
+function triggerSuperAbility() {
+    if (selectedCharacter === 'CYBER_STRIKER') triggerSuperFlight();
+    else if (selectedCharacter === 'TITAN_BRAWLER') triggerTitanSlam();
+    else if (selectedCharacter === 'GHOST_RECON') triggerGhostStealth();
+}
+
+
 // ─── MODULAR BUILDING SYSTEM (KEY [F], [Q]=WALL, [E]=RAMP, [C]=FLOOR) ───
 function initGhostMesh() {
     ghostMaterial = new THREE.MeshBasicMaterial({
@@ -1104,7 +1519,7 @@ function setupKeyListeners() {
                 setBuildType('WALL');
                 showNotification('Build Selection: WALL');
             } else {
-                triggerHandLaser();
+                triggerAbility1();
             }
         }
         if (e.code === 'Digit2' || e.code === 'KeyE') {
@@ -1112,7 +1527,7 @@ function setupKeyListeners() {
                 setBuildType('RAMP');
                 showNotification('Build Selection: RAMP');
             } else {
-                triggerSuperFlight();
+                triggerSuperAbility();
             }
         }
         if (e.code === 'Digit3' || e.code === 'KeyC') {
@@ -1122,7 +1537,7 @@ function setupKeyListeners() {
             }
         }
         if (e.code === 'Digit4' || e.code === 'KeyV') {
-            triggerSuperFlight();
+            triggerSuperAbility();
         }
         if (e.code === 'KeyF') {
             toggleBuildMode();
@@ -1268,58 +1683,70 @@ function createLobbyUI() {
     const lobby = document.createElement('div');
     lobby.id = 'start-lobby-menu';
     lobby.innerHTML = `
-        <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(135deg,rgba(10,15,30,0.92) 0%,rgba(5,7,15,0.96) 100%);backdrop-filter:blur(18px);z-index:99;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;color:#fff;">
-            <div style="max-width:860px;width:92%;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.25);border-radius:16px;padding:32px 36px;box-shadow:0 25px 60px rgba(0,0,0,0.6);display:flex;flex-direction:column;gap:24px;">
-                <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:16px;">
-                    <div>
-                        <div style="font-size:26px;font-weight:900;letter-spacing:3px;color:#38bdf8;text-shadow:0 0 20px rgba(56,189,248,0.5);">JOHN DUNGEONS</div>
-                        <div style="font-size:12px;color:#94a3b8;letter-spacing:1.5px;font-weight:600;">TACTICAL BATTLE ROYALE & CITY COMBAT</div>
+        <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(90deg, rgba(8,12,24,0.92) 0%, rgba(8,12,24,0.82) 48%, rgba(8,12,24,0.18) 100%);backdrop-filter:blur(6px);z-index:99;display:flex;align-items:center;padding-left:48px;font-family:system-ui,-apple-system,sans-serif;color:#fff;box-sizing:border-box;">
+            <div style="max-width:540px;width:100%;display:flex;flex-direction:column;gap:18px;">
+                <div style="border-bottom:1px solid rgba(255,255,255,0.12);padding-bottom:14px;">
+                    <div style="display:inline-block;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.4);border-radius:4px;padding:3px 10px;font-size:10px;font-weight:800;color:#38bdf8;letter-spacing:2px;margin-bottom:6px;">
+                        TACTICAL OPS // BATTLE ROYALE
                     </div>
-                    <div style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.4);border-radius:20px;padding:6px 16px;font-size:11px;font-weight:800;color:#7dd3fc;letter-spacing:1px;">
-                        SYSTEM ONLINE
+                    <div style="font-size:32px;font-weight:900;letter-spacing:3px;color:#f8fafc;text-shadow:0 0 25px rgba(56,189,248,0.35);">
+                        JOHN DUNGEONS
+                    </div>
+                    <div style="font-size:12px;color:#94a3b8;letter-spacing:1px;">OPERADOR E CLASSE DE COMBATE</div>
+                </div>
+
+                <div>
+                    <div style="font-size:11px;font-weight:800;letter-spacing:1.8px;color:#94a3b8;margin-bottom:8px;">SELECIONE SEU PERSONAGEM</div>
+                    <div style="display:flex;flex-direction:column;gap:8px;" id="char-selector-grid">
+                        <div class="char-card active" data-char="CYBER_STRIKER" style="cursor:pointer;background:rgba(15,23,42,0.85);border:2px solid #38bdf8;border-radius:10px;padding:12px 16px;transition:all 0.2s;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div style="font-size:14px;font-weight:800;color:#38bdf8;">CYBER-STRIKER</div>
+                                <span style="font-size:10px;background:rgba(56,189,248,0.2);color:#38bdf8;padding:2px 8px;border-radius:4px;font-weight:700;">ASAS A JATO</span>
+                            </div>
+                            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">Ciborgue com Plasma Laser de mão ([1]/[Q]) e Super Voo ([E]/[4]).</div>
+                        </div>
+
+                        <div class="char-card" data-char="TITAN_BRAWLER" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:12px 16px;transition:all 0.2s;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div style="font-size:14px;font-weight:800;color:#f59e0b;">TITAN BRAWLER</div>
+                                <span style="font-size:10px;background:rgba(245,158,11,0.2);color:#f59e0b;padding:2px 8px;border-radius:4px;font-weight:700;">MECH PESADO</span>
+                            </div>
+                            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">Pods de Micro-Mísseis de Ombro ([1]/[Q]) e Salto Sísmico ([E]/[4]).</div>
+                        </div>
+
+                        <div class="char-card" data-char="GHOST_RECON" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:12px 16px;transition:all 0.2s;">
+                            <div style="display:flex;justify-content:space-between;align-items:center;">
+                                <div style="font-size:14px;font-weight:800;color:#ef4444;">GHOST RECON</div>
+                                <span style="font-size:10px;background:rgba(239,68,68,0.2);color:#ef4444;padding:2px 8px;border-radius:4px;font-weight:700;">NINJA CYBER</span>
+                            </div>
+                            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">Shadow Blink ([1]/[Q]) e Camuflagem Chrono Stealth ([E]/[4]).</div>
+                        </div>
                     </div>
                 </div>
 
                 <div>
-                    <div style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:#94a3b8;margin-bottom:10px;">SELECIONE SEU PERSONAGEM</div>
-                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="char-selector-grid">
-                        <div class="char-card active" data-char="CYBER_STRIKER" style="cursor:pointer;background:rgba(30,41,59,0.8);border:2px solid #38bdf8;border-radius:10px;padding:14px;transition:all 0.2s;">
-                            <div style="font-size:14px;font-weight:800;color:#38bdf8;margin-bottom:4px;">CYBER-STRIKER</div>
-                            <div style="font-size:11px;color:#cbd5e1;line-height:1.4;">Ciborgue de combate avançado com emissor de Laser nas mãos.</div>
+                    <div style="font-size:11px;font-weight:800;letter-spacing:1.8px;color:#94a3b8;margin-bottom:8px;">CLASSE TÁTICA</div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;" id="class-selector-grid">
+                        <div class="class-card active" data-class="ASSAULT" style="cursor:pointer;background:rgba(15,23,42,0.85);border:2px solid #38bdf8;border-radius:8px;padding:10px;text-align:center;transition:all 0.2s;">
+                            <div style="font-size:12px;font-weight:800;color:#38bdf8;">ASSAULT</div>
+                            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">+25% Dano</div>
                         </div>
-                        <div class="char-card" data-char="TITAN_BRAWLER" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
-                            <div style="font-size:14px;font-weight:800;color:#f59e0b;margin-bottom:4px;">TITAN BRAWLER</div>
-                            <div style="font-size:11px;color:#cbd5e1;line-height:1.4;">Exoesqueleto pesado fortificado com armadura de nanocarbono.</div>
+                        <div class="class-card" data-class="VANGUARD" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px;text-align:center;transition:all 0.2s;">
+                            <div style="font-size:12px;font-weight:800;color:#10b981;">VANGUARD</div>
+                            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">+75 Escudo</div>
                         </div>
-                        <div class="char-card" data-char="GHOST_RECON" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
-                            <div style="font-size:14px;font-weight:800;color:#ef4444;margin-bottom:4px;">GHOST RECON</div>
-                            <div style="font-size:11px;color:#cbd5e1;line-height:1.4;">Ninja tático ágil equipado com propulsores ultrarrápidos.</div>
-                        </div>
-                    </div>
-                </div>
-
-                <div>
-                    <div style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:#94a3b8;margin-bottom:10px;">SELECIONE SUA CLASSE TÁTICA</div>
-                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="class-selector-grid">
-                        <div class="class-card active" data-class="ASSAULT" style="cursor:pointer;background:rgba(30,41,59,0.8);border:2px solid #38bdf8;border-radius:10px;padding:14px;transition:all 0.2s;">
-                            <div style="font-size:14px;font-weight:800;color:#38bdf8;margin-bottom:4px;">ASSAULT</div>
-                            <div style="font-size:11px;color:#94a3b8;line-height:1.4;">+25% Dano Laser • Cooldown Reduzido</div>
-                        </div>
-                        <div class="class-card" data-class="VANGUARD" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
-                            <div style="font-size:14px;font-weight:800;color:#10b981;margin-bottom:4px;">VANGUARD</div>
-                            <div style="font-size:11px;color:#94a3b8;line-height:1.4;">+75 Escudo Máximo • Regeneração</div>
-                        </div>
-                        <div class="class-card" data-class="SCOUT" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
-                            <div style="font-size:14px;font-weight:800;color:#facc15;margin-bottom:4px;">SCOUT</div>
-                            <div style="font-size:11px;color:#94a3b8;line-height:1.4;">+30% Velocidade • Super Voo Prolongado</div>
+                        <div class="class-card" data-class="SCOUT" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px;text-align:center;transition:all 0.2s;">
+                            <div style="font-size:12px;font-weight:800;color:#facc15;">SCOUT</div>
+                            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">+30% Velocidade</div>
                         </div>
                     </div>
                 </div>
 
-                <div style="display:flex;justify-content:center;margin-top:8px;">
-                    <button id="btn-start-game" style="background:linear-gradient(90deg,#0284c7,#38bdf8);border:none;border-radius:10px;padding:16px 48px;font-size:16px;font-weight:900;letter-spacing:2px;color:#ffffff;cursor:pointer;box-shadow:0 8px 24px rgba(56,189,248,0.4);transition:all 0.2s;">
+                <div style="margin-top:8px;">
+                    <button id="btn-start-game" style="width:100%;background:linear-gradient(90deg,#0284c7,#38bdf8);border:none;border-radius:10px;padding:16px;font-size:15px;font-weight:900;letter-spacing:2px;color:#ffffff;cursor:pointer;box-shadow:0 8px 24px rgba(56,189,248,0.4);transition:all 0.2s;">
                         INICIAR PARTIDA
                     </button>
+                    <div style="font-size:11px;color:#64748b;text-align:center;margin-top:8px;">[ESPAÇO] PULAR • [CTRL / C] DESLIZAR • [WASD] MOVER</div>
                 </div>
             </div>
         </div>
@@ -1327,17 +1754,33 @@ function createLobbyUI() {
 
     document.body.appendChild(lobby);
 
+    const charColors = {
+        'CYBER_STRIKER': 0x38bdf8,
+        'TITAN_BRAWLER': 0xf59e0b,
+        'GHOST_RECON': 0xef4444
+    };
+
     const charCards = lobby.querySelectorAll('.char-card');
     charCards.forEach((card) => {
         card.addEventListener('click', () => {
+            const charType = card.getAttribute('data-char');
+            selectedCharacter = charType;
+            const themeColor = charColors[charType] || 0x38bdf8;
+
             charCards.forEach((c) => {
                 c.style.borderColor = 'rgba(255,255,255,0.1)';
-                c.style.background = 'rgba(30,41,59,0.5)';
+                c.style.background = 'rgba(15,23,42,0.5)';
             });
-            card.style.borderColor = '#38bdf8';
-            card.style.background = 'rgba(30,41,59,0.85)';
-            selectedCharacter = card.getAttribute('data-char');
+            card.style.borderColor = '#' + themeColor.toString(16).padStart(6, '0');
+            card.style.background = 'rgba(15,23,42,0.9)';
+
             createPlayer(selectedCharacter);
+
+            // Update Pedestal Ring Color
+            if (lobbyPedestal && lobbyPedestal.children[1]) {
+                lobbyPedestal.children[1].material.color.setHex(themeColor);
+            }
+            sfx.playPickup();
         });
     });
 
@@ -1346,11 +1789,12 @@ function createLobbyUI() {
         card.addEventListener('click', () => {
             classCards.forEach((c) => {
                 c.style.borderColor = 'rgba(255,255,255,0.1)';
-                c.style.background = 'rgba(30,41,59,0.5)';
+                c.style.background = 'rgba(15,23,42,0.5)';
             });
             card.style.borderColor = '#38bdf8';
-            card.style.background = 'rgba(30,41,59,0.85)';
+            card.style.background = 'rgba(15,23,42,0.9)';
             selectedClass = card.getAttribute('data-class');
+            sfx.playPickup();
         });
     });
 
@@ -1360,6 +1804,13 @@ function createLobbyUI() {
         sfx.playFlight();
         gameStarted = true;
         lobby.style.display = 'none';
+
+        if (lobbyPedestal) lobbyPedestal.visible = false;
+        if (lobbySpotLight) lobbySpotLight.visible = false;
+
+        // Position player in combat zone
+        playerController.position.set(0, getTerrainHeight(0, 0) + 1.0, 0);
+        playerController.velocity.set(0, 0, 0);
 
         if (selectedClass === 'VANGUARD') {
             playerAttributes.modify('shield', 100, 'override');
@@ -1495,25 +1946,34 @@ function animate() {
 
     if (!pointerLocked) inputManager.mouse.delta.set(0, 0);
 
+    // Lobby Presentation Mode
+    if (!gameStarted) {
+        playerGroup.position.set(0, 0.19, 0);
+        playerGroup.rotation.y = time * 0.45;
+        CharacterModel.updateAnimation(playerGroup, 'IDLE', dt);
+        camera.position.set(0.65, 1.35, 3.1);
+        camera.lookAt(0, 1.05, 0);
+        renderer.render(scene, camera);
+        return;
+    }
+
     // Player Update
     playerController.update(dt);
     const ty = getTerrainHeight(playerController.position.x, playerController.position.z);
 
     if (playerController.currentState === 'SWIMMING') {
-        // Natural swimming buoyancy on water plane (-2.2 + 0.08)
         playerController.position.y = THREE.MathUtils.lerp(playerController.position.y, -2.12, dt * 5.0);
         playerController.velocity.y = 0;
         playerController.isGrounded = false;
         if (Math.random() < 0.28) {
             spawnWaterRipples(playerController.position);
         }
-    } else {
-        if (playerController.currentState !== 'FLYING') {
-            if (playerController.position.y < ty + 0.9) {
-                playerController.position.y = ty + 0.9;
-                playerController.velocity.y = 0;
-                playerController.isGrounded = true;
-            }
+    } else if (playerController.currentState !== 'FLYING') {
+        // Clamp to ground only when falling or grounded, never while ascending on jump!
+        if (playerController.velocity.y <= 0 && playerController.position.y < ty + 0.88) {
+            playerController.position.y = ty + 0.88;
+            playerController.velocity.y = 0;
+            playerController.isGrounded = true;
         }
     }
 
@@ -1548,23 +2008,32 @@ function animate() {
     updateBullets(dt);
     updateLaser(dt);
     updateSuperFlight(dt);
+    updateMissiles(dt);
+    updateTitanSlam(dt);
+    updateGhostStealth(dt);
     updateGhostBuilding();
     updateParticles(dt);
     checkPickups();
 
-    // Ability Cooldown Display
-    if (laserCooldown > 0) {
-        if (hud.laserCd) hud.laserCd.textContent = `${laserCooldown.toFixed(1)}s`;
-    } else {
-        if (hud.laserCd) hud.laserCd.textContent = 'READY';
-    }
-
-    if (playerController.currentState === 'FLYING') {
-        if (hud.flightCd) hud.flightCd.textContent = `VOANDO (${Math.ceil(superFlightTimer)}s)`;
-    } else if (superCooldown > 0) {
-        if (hud.flightCd) hud.flightCd.textContent = `${superCooldown.toFixed(1)}s`;
-    } else {
-        if (hud.flightCd) hud.flightCd.textContent = 'READY';
+    // Dynamic Ability Cooldown Display for each hero
+    if (selectedCharacter === 'CYBER_STRIKER') {
+        if (hud.laserCd) hud.laserCd.textContent = laserCooldown > 0 ? `${laserCooldown.toFixed(1)}s` : 'READY';
+        if (hud.flightCd) {
+            if (playerController.currentState === 'FLYING') hud.flightCd.textContent = `VOANDO (${Math.ceil(superFlightTimer)}s)`;
+            else hud.flightCd.textContent = superCooldown > 0 ? `${superCooldown.toFixed(1)}s` : 'READY';
+        }
+    } else if (selectedCharacter === 'TITAN_BRAWLER') {
+        if (hud.laserCd) hud.laserCd.textContent = titanMissileCd > 0 ? `${titanMissileCd.toFixed(1)}s` : 'READY';
+        if (hud.flightCd) {
+            if (isTitanSlamming) hud.flightCd.textContent = 'SLAM!';
+            else hud.flightCd.textContent = titanSlamCd > 0 ? `${titanSlamCd.toFixed(1)}s` : 'READY';
+        }
+    } else if (selectedCharacter === 'GHOST_RECON') {
+        if (hud.laserCd) hud.laserCd.textContent = ghostBlinkCd > 0 ? `${ghostBlinkCd.toFixed(1)}s` : 'READY';
+        if (hud.flightCd) {
+            if (isGhostStealth) hud.flightCd.textContent = `STEALTH (${Math.ceil(ghostStealthTimer)}s)`;
+            else hud.flightCd.textContent = ghostStealthCd > 0 ? `${ghostStealthCd.toFixed(1)}s` : 'READY';
+        }
     }
 
     if (hud.buildText) {

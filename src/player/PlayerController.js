@@ -39,7 +39,7 @@ export class PlayerController {
         this.swimSpeed = 3.8;
         this.aimSpeed = 2.4;
         this.gravity = 25.0;
-        this.jumpForce = 10.2;
+        this.jumpForce = 12.0;
         this.coyoteTime = 0.15;
         this.jumpBuffer = 0.1;
 
@@ -56,9 +56,10 @@ export class PlayerController {
         // Capsule dimensions
         this.radius = 0.4;
         this.height = 1.8;
-        this.crouchHeight = 1.0;
+        this.crouchHeight = 0.8;
 
         this.obstacles = [];
+        this.getGroundHeight = null;
         this.raycaster = new THREE.Raycaster();
         this._initStates();
         this.setState(PlayerState.IDLE);
@@ -122,27 +123,34 @@ export class PlayerController {
             },
             [PlayerState.SLIDING]: {
                 enter: () => {
-                    this._slideTimer = 1.0;
+                    this._slideTimer = 1.1;
                     this.height = this.crouchHeight;
                     const fwd = this.facingDirection.clone().normalize();
-                    this.velocity.x = fwd.x * this.sprintSpeed * 1.6;
-                    this.velocity.z = fwd.z * this.sprintSpeed * 1.6;
+                    this.velocity.x = fwd.x * this.sprintSpeed * 2.1;
+                    this.velocity.z = fwd.z * this.sprintSpeed * 2.1;
+                    EventBus.emit('player:slideStarted');
                 },
                 update: (dt) => {
                     this._slideTimer -= dt;
-                    this.velocity.x *= 0.95;
-                    this.velocity.z *= 0.95;
-                    this._applyMovement(new THREE.Vector3(), 0, dt);
+                    this.velocity.x *= 0.975;
+                    this.velocity.z *= 0.975;
+                    
+                    const step = new THREE.Vector3(this.velocity.x * dt, 0, this.velocity.z * dt);
+                    this._resolveCollisions(step);
+                    this.position.x += step.x;
+                    this.position.z += step.z;
 
-                    if (this.input.getActionJustPressed('jump') && this.isGrounded) {
+                    if ((this.input.getActionJustPressed('jump') || this.input.getAction('jump')) && this.isGrounded) {
                         this.height = 1.8;
-                        this.velocity.y = this.jumpForce * 1.1;
+                        this.velocity.y = this.jumpForce * 1.15;
+                        this.isGrounded = false;
                         return this.setState(PlayerState.FALLING);
                     }
 
-                    if (this._slideTimer <= 0 || (this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z) < 1.0) {
+                    const speedSq = this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z;
+                    if (this._slideTimer <= 0 || speedSq < 2.0) {
                         this.height = 1.8;
-                        this.setState(PlayerState.IDLE);
+                        this.setState(this.isGrounded ? PlayerState.IDLE : PlayerState.FALLING);
                     }
                 },
                 exit: () => {
@@ -335,6 +343,10 @@ export class PlayerController {
         this.obstacles = colliders || [];
     }
 
+    setGroundHeightFn(fn) {
+        this.getGroundHeight = fn;
+    }
+
     _resolveCollisions(step) {
         if (!this.obstacles || this.obstacles.length === 0) return;
 
@@ -403,11 +415,12 @@ export class PlayerController {
     }
 
     _checkJump() {
-        if (this.input.getActionJustPressed('jump') && (this.isGrounded || this._coyoteTimer > 0)) {
+        if ((this.input.getActionJustPressed('jump') || this.input.getAction('jump')) && (this.isGrounded || this._coyoteTimer > 0)) {
             this.velocity.y = this.jumpForce;
             this.isGrounded = false;
             this._coyoteTimer = 0;
             this.setState(PlayerState.FALLING);
+            EventBus.emit('player:jump');
             return true;
         }
         return false;
@@ -432,21 +445,53 @@ export class PlayerController {
 
     _checkGround(dt) {
         if (this.currentState === PlayerState.FLYING) return;
-        this.raycaster.set(this.position, new THREE.Vector3(0, -1, 0), 0, this.height * 0.5 + 0.1);
-        const hits = this.raycaster.intersectObjects(this.scene.children, true);
 
-        if (hits.length > 0) {
+        // While moving upwards during a jump, do NOT ground or snap!
+        if (this.velocity.y > 0.05) {
+            this.isGrounded = false;
+            this._coyoteTimer = 0;
+            return;
+        }
+
+        let groundY = -999;
+        if (this.getGroundHeight) {
+            groundY = this.getGroundHeight(this.position.x, this.position.z);
+        }
+
+        // Check solid platform surfaces (placed floors, crates, obstacle tops)
+        if (this.obstacles && this.obstacles.length > 0) {
+            const px = this.position.x;
+            const pz = this.position.z;
+            const py = this.position.y;
+            for (let i = 0; i < this.obstacles.length; i++) {
+                const ob = this.obstacles[i];
+                const minX = ob.minX ?? (ob.min?.x ?? -999);
+                const maxX = ob.maxX ?? (ob.max?.x ?? 999);
+                const minZ = ob.minZ ?? (ob.min?.z ?? -999);
+                const maxZ = ob.maxZ ?? (ob.max?.z ?? 999);
+                const topY = ob.maxY ?? (ob.max?.y ?? (ob.center ? ob.center.y + (ob.height || 0) : -999));
+
+                if (px >= minX && px <= maxX && pz >= minZ && pz <= maxZ) {
+                    if (topY <= py + 0.35 && topY > groundY) {
+                        groundY = topY;
+                    }
+                }
+            }
+        }
+
+        const targetY = groundY + this.height * 0.5;
+        if (this.position.y <= targetY + 0.25) {
             this.isGrounded = true;
             this._coyoteTimer = this.coyoteTime;
             this.velocity.y = 0;
-            this.position.y = hits[0].point.y + this.height * 0.5;
+            this.position.y = targetY;
             if (this.currentState === PlayerState.FALLING || this.currentState === PlayerState.GLIDING) {
                 this.setState(PlayerState.IDLE);
             }
         } else {
             this.isGrounded = false;
             this._coyoteTimer -= dt;
-            if (this.currentState !== PlayerState.FALLING && this.currentState !== PlayerState.GLIDING && this.currentState !== PlayerState.MANTLING) {
+            if (this.currentState !== PlayerState.FALLING && this.currentState !== PlayerState.GLIDING && this.currentState !== PlayerState.MANTLING && this.currentState !== PlayerState.SWIMMING && this.currentState !== PlayerState.SLIDING) {
                 this.setState(PlayerState.FALLING);
             }
         }
