@@ -31,8 +31,13 @@ export class CameraController {
         this.aimFov = 50;
         this.currentFov = 70;
 
+        this.collisionObjects = [];
         this.shakes = [];
         this.raycaster = new THREE.Raycaster();
+    }
+
+    setCollisionObjects(objects) {
+        this.collisionObjects = objects;
     }
 
     attach(target) {
@@ -61,18 +66,18 @@ export class CameraController {
             this.swapShoulder();
         }
 
-        // Mouse look
+        // Mouse look (Correct non-inverted TPS axis)
         const mouseDelta = this.input.mouse.delta;
         this.yaw -= mouseDelta.x * this.sensitivity;
-        this.pitch -= mouseDelta.y * this.sensitivity;
-        this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, this.pitch));
+        this.pitch += mouseDelta.y * this.sensitivity;
+        this.pitch = Math.max(-0.45, Math.min(1.15, this.pitch));
 
         // Controller look axes
         const lookX = this.input.getAxis('lookX');
         const lookY = this.input.getAxis('lookY');
         this.yaw -= lookX * 2.5 * dt;
-        this.pitch -= lookY * 2.5 * dt;
-        this.pitch = Math.max(this.minPitch, Math.min(this.maxPitch, this.pitch));
+        this.pitch += lookY * 2.5 * dt;
+        this.pitch = Math.max(-0.45, Math.min(1.15, this.pitch));
 
         // Desired FOV based on state
         let targetFov = this.baseFov;
@@ -84,7 +89,13 @@ export class CameraController {
 
         // Calculate target camera position via spherical coordinates
         const targetPos = this.target.position ? this.target.position : this.target;
-        const focusPoint = targetPos.clone().add(this.shoulderOffset);
+        // Right shoulder offset rotated with yaw so shoulder is always to the player's right
+        const rotatedShoulder = new THREE.Vector3(
+            this.shoulderOffset.x * Math.cos(this.yaw) + this.shoulderOffset.z * Math.sin(this.yaw),
+            this.shoulderOffset.y,
+            -this.shoulderOffset.x * Math.sin(this.yaw) + this.shoulderOffset.z * Math.cos(this.yaw)
+        );
+        const focusPoint = targetPos.clone().add(rotatedShoulder);
 
         const offset = new THREE.Vector3(
             Math.sin(this.yaw) * Math.cos(this.pitch),
@@ -94,14 +105,19 @@ export class CameraController {
 
         const desiredCamPos = focusPoint.clone().add(offset);
 
-        // Spring arm collision resolution
-        this.raycaster.set(focusPoint, desiredCamPos.clone().sub(focusPoint).normalize());
-        const maxDist = focusPoint.distanceTo(desiredCamPos);
-        const hits = this.raycaster.intersectObjects(this.scene.children, true);
-
+        // Spring arm collision resolution against environment geometry ONLY
         let finalCamPos = desiredCamPos;
-        if (hits.length > 0 && hits[0].distance < maxDist) {
-            finalCamPos = hits[0].point.clone().add(hits[0].face.normal.clone().multiplyScalar(0.2));
+        if (this.collisionObjects && this.collisionObjects.length > 0) {
+            const camDir = desiredCamPos.clone().sub(focusPoint);
+            const maxDist = camDir.length();
+            if (maxDist > 0.1) {
+                this.raycaster.set(focusPoint, camDir.normalize());
+                const hits = this.raycaster.intersectObjects(this.collisionObjects, true);
+                if (hits.length > 0 && hits[0].distance < maxDist) {
+                    const hitDist = Math.max(0.8, hits[0].distance - 0.2);
+                    finalCamPos = focusPoint.clone().add(camDir.multiplyScalar(hitDist));
+                }
+            }
         }
 
         // Camera Shake calculation

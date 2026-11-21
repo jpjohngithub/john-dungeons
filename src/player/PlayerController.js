@@ -9,7 +9,8 @@ export const PlayerState = {
     FALLING: 'FALLING',
     GLIDING: 'GLIDING',
     MANTLING: 'MANTLING',
-    AIMING: 'AIMING'
+    AIMING: 'AIMING',
+    SWIMMING: 'SWIMMING'
 };
 
 /**
@@ -28,10 +29,13 @@ export class PlayerController {
 
         this.currentState = PlayerState.IDLE;
         this.isGrounded = false;
+        this.waterLevel = -2.2;
+        this.isSwimming = false;
 
         // Stats & Tuning
-        this.walkSpeed = 4.0;
-        this.sprintSpeed = 6.8;
+        this.walkSpeed = 4.2;
+        this.sprintSpeed = 7.2;
+        this.swimSpeed = 3.8;
         this.aimSpeed = 2.4;
         this.gravity = 25.0;
         this.jumpForce = 8.5;
@@ -206,6 +210,35 @@ export class PlayerController {
                     this.rotation.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.facingDirection);
                 },
                 exit: () => {}
+            },
+            [PlayerState.SWIMMING]: {
+                enter: () => {
+                    this.isSwimming = true;
+                    this.velocity.y = 0;
+                },
+                update: (dt) => {
+                    // Buoyancy float on surface
+                    const targetWaterY = this.waterLevel + 0.1;
+                    this.position.y = THREE.MathUtils.lerp(this.position.y, targetWaterY, dt * 4.0);
+
+                    const moveInput = this._getMovementInput();
+                    this._applyMovement(moveInput, this.swimSpeed, dt);
+
+                    // Swim jump / propel upward
+                    if (this.input.getActionJustPressed('jump')) {
+                        this.velocity.y = 5.5;
+                        this.position.y += 0.3;
+                    }
+
+                    // Check if walked out of water onto land
+                    if (this.isGrounded && this.position.y > this.waterLevel + 0.3) {
+                        this.isSwimming = false;
+                        this.setState(moveInput.lengthSq() > 0 ? PlayerState.WALKING : PlayerState.IDLE);
+                    }
+                },
+                exit: () => {
+                    this.isSwimming = false;
+                }
             }
         };
     }
@@ -311,11 +344,18 @@ export class PlayerController {
     update(dt) {
         this._checkGround(dt);
 
+        // Water entry check
+        if (this.position.y <= this.waterLevel + 0.25) {
+            if (this.currentState !== PlayerState.SWIMMING) {
+                this.setState(PlayerState.SWIMMING);
+            }
+        }
+
         if (this.states[this.currentState]) {
             this.states[this.currentState].update(dt);
         }
 
-        if (!this.isGrounded && this.currentState !== PlayerState.MANTLING && this.currentState !== PlayerState.GLIDING) {
+        if (!this.isGrounded && this.currentState !== PlayerState.MANTLING && this.currentState !== PlayerState.GLIDING && this.currentState !== PlayerState.SWIMMING) {
             this.velocity.y -= this.gravity * dt;
             this.position.y += this.velocity.y * dt;
         }

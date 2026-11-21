@@ -15,6 +15,7 @@ import EventBus from './core/EventBus.js';
 import { InputManager } from './player/InputManager.js';
 import { PlayerController } from './player/PlayerController.js';
 import { CameraController } from './player/CameraController.js';
+import { CharacterModel } from './player/CharacterModel.js';
 import { StylizedPBRMaterial } from './rendering/StylizedPBRMaterial.js';
 import { DayNightCycle } from './rendering/DayNightCycle.js';
 import StormManager from './battleroyale/StormManager.js';
@@ -172,6 +173,7 @@ function init() {
     createWater();
     createTrees(140);
     createRocks(70);
+    createVegetation(60, 140);
     createPickups(40);
 
     // Gameplay Attributes (GAS)
@@ -184,6 +186,7 @@ function init() {
     playerController.position.copy(playerGroup.position);
     cameraController = new CameraController(camera, inputManager, scene);
     cameraController.attach(playerGroup);
+    cameraController.setCollisionObjects([terrain, ...rocks]);
 
     // Storm
     stormManager = new StormManager(scene);
@@ -256,20 +259,96 @@ function createTerrain() {
 }
 
 function createWater() {
-    const geo = new THREE.PlaneGeometry(700, 700);
+    const geo = new THREE.PlaneGeometry(800, 800, 32, 32);
     geo.rotateX(-Math.PI / 2);
     const mat = new THREE.MeshStandardMaterial({
-        color: 0x1a88bb,
-        metalness: 0.8,
-        roughness: 0.1,
+        color: 0x0284c7, // Vibrant tropical ocean
+        metalness: 0.85,
+        roughness: 0.15,
         transparent: true,
-        opacity: 0.75,
+        opacity: 0.82,
         flatShading: true
     });
     waterPlane = new THREE.Mesh(geo, mat);
-    waterPlane.position.y = -2.5;
+    waterPlane.position.y = -2.2;
     waterPlane.receiveShadow = true;
     scene.add(waterPlane);
+}
+
+function spawnWaterRipples(pos) {
+    const geo = new THREE.RingGeometry(0.2, 0.45, 16);
+    geo.rotateX(-Math.PI / 2);
+    const mat = new THREE.MeshBasicMaterial({
+        color: 0xbae6fd,
+        transparent: true,
+        opacity: 0.7,
+        side: THREE.DoubleSide
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.set(pos.x, -2.15, pos.z);
+    scene.add(mesh);
+    particles.push({
+        mesh,
+        vel: new THREE.Vector3(0, 0, 0),
+        life: 0.8,
+        update: (dt, p) => {
+            mesh.scale.addScalar(dt * 2.2);
+            mat.opacity = (p.life / 0.8) * 0.7;
+        }
+    });
+}
+
+const bushes = [], grassClumps = [];
+function createVegetation(bushCount, grassCount) {
+    const bushMat = StylizedPBRMaterial.createForest();
+    const bushGeo = new THREE.IcosahedronGeometry(0.9, 1);
+
+    for (let i = 0; i < bushCount; i++) {
+        const x = (Math.random() - 0.5) * 380;
+        const z = (Math.random() - 0.5) * 380;
+        const y = getTerrainHeight(x, z);
+        if (y < -1 || y > 9) continue;
+
+        const group = new THREE.Group();
+        const main = new THREE.Mesh(bushGeo, bushMat);
+        main.scale.set(1.2, 0.85, 1.2);
+        main.position.y = 0.5;
+        main.castShadow = true;
+        group.add(main);
+
+        const sub = new THREE.Mesh(bushGeo, bushMat);
+        sub.scale.set(0.7, 0.6, 0.7);
+        sub.position.set(0.5, 0.4, 0.2);
+        group.add(sub);
+
+        group.position.set(x, y, z);
+        scene.add(group);
+        bushes.push(group);
+    }
+
+    const grassMat = new THREE.MeshStandardMaterial({
+        color: 0x4ade80,
+        roughness: 0.85,
+        flatShading: true
+    });
+    const bladeGeo = new THREE.ConeGeometry(0.12, 0.6, 3);
+    for (let i = 0; i < grassCount; i++) {
+        const x = (Math.random() - 0.5) * 360;
+        const z = (Math.random() - 0.5) * 360;
+        const y = getTerrainHeight(x, z);
+        if (y < -1 || y > 8) continue;
+
+        const clump = new THREE.Group();
+        for (let b = 0; b < 4; b++) {
+            const blade = new THREE.Mesh(bladeGeo, grassMat);
+            blade.position.set((Math.random() - 0.5) * 0.3, 0.25, (Math.random() - 0.5) * 0.3);
+            blade.rotation.set((Math.random() - 0.5) * 0.3, Math.random() * Math.PI, (Math.random() - 0.5) * 0.3);
+            clump.add(blade);
+        }
+        clump.position.set(x, y, z);
+        scene.add(clump);
+        grassClumps.push(clump);
+    }
 }
 
 function getTerrainHeight(x, z) {
@@ -356,62 +435,19 @@ function createPickups(count) {
 
 // ─── PLAYER CHARACTER ───────────────────────────────────────────────
 function createPlayer() {
-    playerGroup = new THREE.Group();
-
-    // Body
-    const bodyMat = StylizedPBRMaterial.createCharacter();
-    const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.9, 8, 12), bodyMat);
-    body.position.y = 1.1;
-    body.castShadow = true;
-    playerGroup.add(body);
-
-    // Head
-    const headMat = new StylizedPBRMaterial({ baseColor: 0xffdbac, shadowColor: 0x6e4530, celSteps: 3 });
-    const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 8), headMat);
-    head.position.y = 1.95;
-    head.castShadow = true;
-    playerGroup.add(head);
-
-    // Visor
-    const visor = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.1, 0.15), new THREE.MeshBasicMaterial({ color: 0x00ffff }));
-    visor.position.set(0, 1.98, 0.22);
-    playerGroup.add(visor);
-
-    // Assault Rifle
-    const weapon = new THREE.Group();
-    const barrel = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.12, 0.9), new THREE.MeshStandardMaterial({ color: 0x222222, metalness: 0.8 }));
-    barrel.position.set(0.35, 1.25, 0.45);
-    weapon.add(barrel);
-    playerGroup.add(weapon);
-    playerGroup.userData.weapon = weapon;
-
-    playerGroup.position.set(0, getTerrainHeight(0, 0) + 1, 0);
+    playerGroup = CharacterModel.createHero();
+    playerGroup.position.set(0, getTerrainHeight(0, 0) + 0.1, 0);
     scene.add(playerGroup);
 }
 
 // ─── AI ENEMIES (BOTS) ──────────────────────────────────────────────
 function spawnEnemies(count) {
-    const enemyMat = new StylizedPBRMaterial({ baseColor: 0xee3333, shadowColor: 0x550a0a, celSteps: 3 });
-
     for (let i = 0; i < count; i++) {
         const x = (Math.random() - 0.5) * 350 + (Math.random() > 0.5 ? 40 : -40);
         const z = (Math.random() - 0.5) * 350 + (Math.random() > 0.5 ? 40 : -40);
         const y = getTerrainHeight(x, z);
 
-        const group = new THREE.Group();
-        const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.4, 0.9, 8, 12), enemyMat);
-        body.position.y = 1.1;
-        body.castShadow = true;
-        group.add(body);
-
-        const head = new THREE.Mesh(new THREE.SphereGeometry(0.28, 8, 8), new THREE.MeshBasicMaterial({ color: 0x222222 }));
-        head.position.y = 1.95;
-        group.add(head);
-
-        const gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.1, 0.7), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-        gun.position.set(0.35, 1.25, 0.35);
-        group.add(gun);
-
+        const group = CharacterModel.createEnemyBot();
         group.position.set(x, y, z);
         group.userData = {
             id: `Bot_${i + 1}`,
@@ -453,8 +489,10 @@ function updateEnemies(dt) {
             if (now - bot.userData.lastAttackTime > 1200) {
                 bot.userData.lastAttackTime = now;
                 sfx.playShoot();
-                createBullet(bot.position.clone().add(new THREE.Vector3(0, 1.3, 0)), playerPos.clone().add(new THREE.Vector3(0, 1.2, 0)), false);
+                CharacterModel.triggerRecoil(bot);
+                createBullet(bot.position.clone().add(new THREE.Vector3(0, 1.2, 0)), playerPos.clone().add(new THREE.Vector3(0, 1.2, 0)), false);
             }
+            CharacterModel.updateAnimation(bot, 'WALKING', dt, 1.2);
         } else {
             // Patrol wander
             bot.position.x += bot.userData.moveDir.x * 2.5 * dt;
@@ -464,6 +502,7 @@ function updateEnemies(dt) {
             if (Math.random() < 0.01) {
                 bot.userData.moveDir.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
             }
+            CharacterModel.updateAnimation(bot, 'WALKING', dt, 0.7);
         }
 
         // Stick bot to terrain
@@ -479,6 +518,7 @@ function shootWeapon() {
     lastShotTime = now;
 
     sfx.playShoot();
+    CharacterModel.triggerRecoil(playerGroup);
 
     // Camera recoil punch
     cameraController.addShake(0.3, 0.12);
@@ -585,7 +625,7 @@ function castFireball() {
         lifetime: 3.0
     });
 
-    showNotification('🔥 Fireball cast!');
+    showNotification('Plasma Burst Discharged!');
 }
 
 function updateFireballs(dt) {
@@ -673,8 +713,9 @@ function buildWall() {
     wall.receiveShadow = true;
     scene.add(wall);
     placedWalls.push(wall);
+    cameraController.setCollisionObjects([terrain, ...rocks, ...placedWalls]);
 
-    showNotification('🛡️ Wooden Wall Built (-20 Materials)');
+    showNotification('Tactical Barrier Deployed (-20 Materials)');
 }
 
 // ─── DAMAGE & FLOATING NUMBERS ──────────────────────────────────────
@@ -697,7 +738,7 @@ function applyDamageToEnemy(enemy, amount, hitPoint) {
         enemy.userData.isDead = true;
         kills++;
         materials += 30;
-        showNotification(`☠️ Eliminated ${enemy.userData.id}! (+30 Wood)`);
+        showNotification(`Target Neutralized: ${enemy.userData.id} (+30 Materials)`);
         sfx.playPickup();
 
         // Death collapse animation
@@ -734,7 +775,7 @@ function applyDamageToPlayer(amount) {
     }
 
     if (playerAttributes.get('health') <= 0) {
-        showNotification('💀 YOU DIED! Press R to Respawn');
+        showNotification('ELIMINATED — PRESS [R] TO RE-DEPLOY');
     }
 }
 
@@ -765,8 +806,12 @@ function spawnSparks(pos) {
 function updateParticles(dt) {
     for (let i = particles.length - 1; i >= 0; i--) {
         const p = particles[i];
-        p.mesh.position.addScaledVector(p.vel, dt);
-        p.vel.y -= 20 * dt; // gravity
+        if (p.update) {
+            p.update(dt, p);
+        } else {
+            p.mesh.position.addScaledVector(p.vel, dt);
+            p.vel.y -= 20 * dt; // gravity
+        }
         p.life -= dt;
         if (p.life <= 0) {
             scene.remove(p.mesh);
@@ -791,7 +836,7 @@ function setupKeyListeners() {
             playerAttributes.modify('health', 100, 'override');
             playerAttributes.modify('shield', 50, 'override');
             playerController.position.set(0, getTerrainHeight(0, 0) + 1, 0);
-            showNotification('✨ Respawned!');
+            showNotification('Re-deployed to Combat Zone');
         }
     });
 }
@@ -800,73 +845,98 @@ function setupKeyListeners() {
 function createHUD() {
     const container = document.getElementById('hud-layer');
     container.innerHTML = `
-        <div id="damage-vignette" style="position:fixed;top:0;left:0;width:100vw;height:100vh;box-shadow:inset 0 0 100px #ff0000;pointer-events:none;opacity:0;transition:opacity 0.2s;"></div>
+        <div id="damage-vignette" style="position:fixed;top:0;left:0;width:100vw;height:100vh;box-shadow:inset 0 0 120px rgba(239,68,68,0.7);pointer-events:none;opacity:0;transition:opacity 0.2s;"></div>
         
-        <!-- Top Compass & Alive -->
-        <div style="position:absolute;top:12px;left:50%;transform:translateX(-50%);display:flex;gap:12px;align-items:center;">
-            <div id="compass" style="background:rgba(0,0,0,0.6);padding:6px 20px;border-radius:14px;font-size:14px;letter-spacing:2px;border:1px solid rgba(255,255,255,0.2);">N 0°</div>
-            <div style="background:rgba(220,50,50,0.8);padding:6px 14px;border-radius:14px;font-size:13px;font-weight:bold;">⚔️ KILLS: <span id="hud-kills">0</span></div>
-            <div style="background:rgba(80,160,50,0.8);padding:6px 14px;border-radius:14px;font-size:13px;font-weight:bold;">🪵 WOOD: <span id="hud-mats">100</span></div>
+        <!-- Top Tactical Bar: Compass, Kills, Materials -->
+        <div style="position:absolute;top:16px;left:50%;transform:translateX(-50%);display:flex;gap:10px;align-items:center;font-family:system-ui,-apple-system,sans-serif;">
+            <div id="compass" style="background:rgba(15,23,42,0.85);backdrop-filter:blur(12px);padding:6px 18px;border-radius:6px;font-size:12px;font-weight:700;letter-spacing:2px;border:1px solid rgba(255,255,255,0.12);color:#94a3b8;box-shadow:0 4px 12px rgba(0,0,0,0.3);">N 0°</div>
+            <div style="background:rgba(15,23,42,0.85);backdrop-filter:blur(12px);padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;border:1px solid rgba(239,68,68,0.3);color:#fca5a5;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="22" y1="12" x2="18" y2="12"/><line x1="6" y1="12" x2="2" y2="12"/><line x1="12" y1="6" x2="12" y2="2"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
+                <span>KILLS:</span>
+                <span id="hud-kills" style="color:#ffffff;font-size:13px;">0</span>
+            </div>
+            <div style="background:rgba(15,23,42,0.85);backdrop-filter:blur(12px);padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;border:1px solid rgba(34,197,94,0.3);color:#86efac;display:flex;align-items:center;gap:6px;box-shadow:0 4px 12px rgba(0,0,0,0.3);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2.5"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>
+                <span>WOOD:</span>
+                <span id="hud-mats" style="color:#ffffff;font-size:13px;">100</span>
+            </div>
         </div>
 
-        <!-- Crosshair -->
+        <!-- Tactical Crosshair -->
         <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);pointer-events:none;">
-            <svg width="24" height="24" viewBox="0 0 24 24">
-                <circle cx="12" cy="12" r="3" fill="#ffffff" opacity="0.9"/>
-                <line x1="12" y1="2" x2="12" y2="7" stroke="#ffffff" stroke-width="2"/>
-                <line x1="12" y1="17" x2="12" y2="22" stroke="#ffffff" stroke-width="2"/>
-                <line x1="2" y1="12" x2="7" y2="12" stroke="#ffffff" stroke-width="2"/>
-                <line x1="17" y1="12" x2="22" y2="12" stroke="#ffffff" stroke-width="2"/>
+            <svg width="28" height="28" viewBox="0 0 28 28">
+                <circle cx="14" cy="14" r="2.5" fill="#38bdf8"/>
+                <circle cx="14" cy="14" r="8" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1" stroke-dasharray="2 3"/>
+                <line x1="14" y1="1" x2="14" y2="7" stroke="#ffffff" stroke-width="1.8"/>
+                <line x1="14" y1="21" x2="14" y2="27" stroke="#ffffff" stroke-width="1.8"/>
+                <line x1="1" y1="14" x2="7" y2="14" stroke="#ffffff" stroke-width="1.8"/>
+                <line x1="21" y1="14" x2="27" y2="14" stroke="#ffffff" stroke-width="1.8"/>
             </svg>
         </div>
 
-        <!-- Left Bars (Health, Shield, Stamina) -->
-        <div style="position:absolute;bottom:20px;left:20px;display:flex;flex-direction:column;gap:6px;">
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-size:12px;width:18px;">❤️</span>
-                <div style="background:rgba(0,0,0,0.7);border-radius:4px;width:200px;height:16px;overflow:hidden;border:1px solid rgba(255,255,255,0.2);">
-                    <div id="hud-hp" style="background:linear-gradient(90deg,#ff1a1a,#ff6666);height:100%;width:100%;border-radius:4px;"></div>
+        <!-- Left Tactical Status Gauges (Health, Shield, Stamina) -->
+        <div style="position:absolute;bottom:24px;left:24px;display:flex;flex-direction:column;gap:8px;background:rgba(15,23,42,0.85);backdrop-filter:blur(16px);padding:14px 18px;border-radius:10px;border:1px solid rgba(255,255,255,0.12);box-shadow:0 8px 32px rgba(0,0,0,0.4);min-width:260px;font-family:system-ui,-apple-system,sans-serif;">
+            <!-- Health Bar -->
+            <div style="display:flex;align-items:center;gap:10px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2.5"><path d="M19 14c1.49-1.46 3-3.21 3-5.5A5.5 5.5 0 0 0 16.5 3c-1.76 0-3 .5-4.5 2-1.5-1.5-2.74-2-4.5-2A5.5 5.5 0 0 0 2 8.5c0 2.3 1.5 4.05 3 5.5l7 7Z"/></svg>
+                <div style="background:rgba(30,41,59,0.9);border-radius:4px;flex:1;height:12px;overflow:hidden;border:1px solid rgba(239,68,68,0.3);">
+                    <div id="hud-hp" style="background:linear-gradient(90deg,#dc2626,#ef4444);height:100%;width:100%;border-radius:3px;box-shadow:0 0 8px rgba(239,68,68,0.6);"></div>
                 </div>
-                <span id="hud-hp-text" style="font-size:12px;font-weight:bold;min-width:35px;">100</span>
+                <span id="hud-hp-text" style="font-size:12px;font-weight:800;color:#f87171;min-width:32px;text-align:right;">100</span>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-size:12px;width:18px;">🛡️</span>
-                <div style="background:rgba(0,0,0,0.7);border-radius:4px;width:200px;height:14px;overflow:hidden;border:1px solid rgba(255,255,255,0.2);">
-                    <div id="hud-shield" style="background:linear-gradient(90deg,#1a75ff,#66a3ff);height:100%;width:50%;border-radius:4px;"></div>
+            <!-- Shield Bar -->
+            <div style="display:flex;align-items:center;gap:10px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+                <div style="background:rgba(30,41,59,0.9);border-radius:4px;flex:1;height:12px;overflow:hidden;border:1px solid rgba(56,189,248,0.3);">
+                    <div id="hud-shield" style="background:linear-gradient(90deg,#0284c7,#38bdf8);height:100%;width:50%;border-radius:3px;box-shadow:0 0 8px rgba(56,189,248,0.6);"></div>
                 </div>
-                <span id="hud-shield-text" style="font-size:12px;font-weight:bold;min-width:35px;">50</span>
+                <span id="hud-shield-text" style="font-size:12px;font-weight:800;color:#7dd3fc;min-width:32px;text-align:right;">50</span>
             </div>
-            <div style="display:flex;align-items:center;gap:8px;">
-                <span style="font-size:12px;width:18px;">⚡</span>
-                <div style="background:rgba(0,0,0,0.7);border-radius:4px;width:200px;height:10px;overflow:hidden;">
-                    <div id="hud-stamina" style="background:linear-gradient(90deg,#ffbb00,#ffee44);height:100%;width:100%;border-radius:4px;"></div>
+            <!-- Stamina Bar -->
+            <div style="display:flex;align-items:center;gap:10px;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#facc15" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <div style="background:rgba(30,41,59,0.9);border-radius:4px;flex:1;height:8px;overflow:hidden;">
+                    <div id="hud-stamina" style="background:linear-gradient(90deg,#ca8a04,#facc15);height:100%;width:100%;border-radius:3px;"></div>
                 </div>
+                <span style="font-size:10px;font-weight:700;color:#94a3b8;min-width:32px;text-align:right;">ENERGY</span>
             </div>
         </div>
 
         <!-- Bottom Action Bar / Hotbar -->
-        <div style="position:absolute;bottom:20px;left:50%;transform:translateX(-50%);display:flex;gap:12px;">
-            <div style="background:rgba(0,0,0,0.7);padding:8px 16px;border-radius:8px;border:2px solid #ffaa00;text-align:center;">
-                <div style="font-size:11px;color:#aaa;">[L-CLICK]</div>
-                <div style="font-size:14px;font-weight:bold;">🔫 RIFLE</div>
+        <div style="position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;gap:10px;font-family:system-ui,-apple-system,sans-serif;">
+            <div style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(245,158,11,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f59e0b" stroke-width="2"><path d="M2 13h4l2-3h7l1-2h6v4h-4l-2 3h-4l-1 2H2v-4z"/><circle cx="17" cy="11" r="1" fill="#f59e0b"/></svg>
+                <div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">L-CLICK</div>
+                    <div style="font-size:13px;font-weight:800;color:#ffffff;letter-spacing:0.5px;">RIFLE</div>
+                </div>
             </div>
-            <div id="slot-ability" style="background:rgba(0,0,0,0.7);padding:8px 16px;border-radius:8px;border:2px solid #ff4400;text-align:center;">
-                <div style="font-size:11px;color:#aaa;">[1] FIREBALL</div>
-                <div id="ability-cd-text" style="font-size:14px;font-weight:bold;">READY</div>
+            <div id="slot-ability" style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(249,115,22,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+                <div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">KEY [1]</div>
+                    <div id="ability-cd-text" style="font-size:13px;font-weight:800;color:#ffffff;letter-spacing:0.5px;">READY</div>
+                </div>
             </div>
-            <div style="background:rgba(0,0,0,0.7);padding:8px 16px;border-radius:8px;border:2px solid #55aa33;text-align:center;">
-                <div style="font-size:11px;color:#aaa;">[F] BUILD</div>
-                <div style="font-size:14px;font-weight:bold;">🧱 WALL (20)</div>
+            <div style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(16,185,129,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="15"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="12" y1="3" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="21"/></svg>
+                <div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">KEY [F]</div>
+                    <div style="font-size:13px;font-weight:800;color:#ffffff;letter-spacing:0.5px;">WALL (20)</div>
+                </div>
             </div>
         </div>
 
-        <!-- Top Right Storm & Minimap -->
-        <div style="position:absolute;top:16px;right:16px;display:flex;flex-direction:column;align-items:flex-end;gap:8px;">
-            <div id="hud-storm-status" style="background:rgba(80,0,120,0.7);padding:4px 12px;border-radius:8px;font-size:12px;color:#ffccff;">⚡ STORM PHASE 1</div>
-            <div style="width:140px;height:140px;border-radius:50%;overflow:hidden;border:2px solid rgba(255,255,255,0.3);background:rgba(10,25,10,0.8);">
+        <!-- Top Right Tactical Radar & Storm Indicator -->
+        <div style="position:absolute;top:16px;right:16px;display:flex;flex-direction:column;align-items:flex-end;gap:8px;font-family:system-ui,-apple-system,sans-serif;">
+            <div id="hud-storm-status" style="background:rgba(15,23,42,0.85);backdrop-filter:blur(12px);padding:6px 14px;border-radius:6px;font-size:11px;font-weight:700;color:#d8b4fe;border:1px solid rgba(192,132,252,0.3);display:flex;align-items:center;gap:6px;">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2.5"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                <span>STORM PHASE 1</span>
+            </div>
+            <div style="width:140px;height:140px;border-radius:50%;overflow:hidden;border:2px solid rgba(255,255,255,0.2);background:rgba(15,23,42,0.9);backdrop-filter:blur(10px);box-shadow:0 8px 24px rgba(0,0,0,0.5);">
                 <canvas id="minimap-canvas" width="140" height="140"></canvas>
             </div>
-            <div id="hud-fps" style="font-size:11px;color:#888;">60 FPS</div>
+            <div id="hud-fps" style="font-size:11px;font-weight:700;color:#64748b;letter-spacing:1px;">60 FPS</div>
         </div>
 
         <div id="hud-notif" style="position:absolute;top:80px;left:50%;transform:translateX(-50%);font-size:16px;font-weight:bold;color:#ffd700;display:none;text-shadow:0 0 10px rgba(0,0,0,0.8);"></div>
@@ -998,7 +1068,7 @@ function checkPickups() {
             materials += 25;
             playerAttributes.modify('shield', 25, 'add');
             sfx.playPickup();
-            showNotification('📦 Loot Found! (+25 Shield, +25 Materials)');
+            showNotification('Supply Cache Recovered (+25 Shield, +25 Materials)');
         }
     }
 }
@@ -1015,13 +1085,33 @@ function animate() {
     // Player Update
     playerController.update(dt);
     const ty = getTerrainHeight(playerController.position.x, playerController.position.z);
-    if (playerController.position.y < ty + 0.9) {
-        playerController.position.y = ty + 0.9;
+
+    if (playerController.currentState === 'SWIMMING') {
+        // Natural swimming buoyancy on water plane (-2.2 + 0.08)
+        playerController.position.y = THREE.MathUtils.lerp(playerController.position.y, -2.12, dt * 5.0);
         playerController.velocity.y = 0;
-        playerController.isGrounded = true;
+        playerController.isGrounded = false;
+        if (Math.random() < 0.28) {
+            spawnWaterRipples(playerController.position);
+        }
+    } else {
+        if (playerController.position.y < ty + 0.9) {
+            playerController.position.y = ty + 0.9;
+            playerController.velocity.y = 0;
+            playerController.isGrounded = true;
+        }
     }
+
     playerGroup.position.copy(playerController.position);
     playerGroup.quaternion.copy(playerController.rotation);
+
+    // Animate articulated 3D character (walk, sprint, swim, idle)
+    CharacterModel.updateAnimation(playerGroup, playerController.currentState, dt);
+
+    // Animate water ocean waves
+    if (waterPlane) {
+        waterPlane.position.y = -2.2 + Math.sin(time * 1.5) * 0.06;
+    }
 
     // Camera
     cameraController.update(dt, playerController.currentState);
