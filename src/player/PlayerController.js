@@ -10,7 +10,8 @@ export const PlayerState = {
     GLIDING: 'GLIDING',
     MANTLING: 'MANTLING',
     AIMING: 'AIMING',
-    SWIMMING: 'SWIMMING'
+    SWIMMING: 'SWIMMING',
+    FLYING: 'FLYING'
 };
 
 /**
@@ -38,7 +39,7 @@ export class PlayerController {
         this.swimSpeed = 3.8;
         this.aimSpeed = 2.4;
         this.gravity = 25.0;
-        this.jumpForce = 8.5;
+        this.jumpForce = 10.2;
         this.coyoteTime = 0.15;
         this.jumpBuffer = 0.1;
 
@@ -57,6 +58,7 @@ export class PlayerController {
         this.height = 1.8;
         this.crouchHeight = 1.0;
 
+        this.obstacles = [];
         this.raycaster = new THREE.Raycaster();
         this._initStates();
         this.setState(PlayerState.IDLE);
@@ -120,17 +122,25 @@ export class PlayerController {
             },
             [PlayerState.SLIDING]: {
                 enter: () => {
-                    this._slideTimer = 0.8;
+                    this._slideTimer = 1.0;
                     this.height = this.crouchHeight;
+                    const fwd = this.facingDirection.clone().normalize();
+                    this.velocity.x = fwd.x * this.sprintSpeed * 1.6;
+                    this.velocity.z = fwd.z * this.sprintSpeed * 1.6;
                 },
                 update: (dt) => {
                     this._slideTimer -= dt;
-                    // Slide momentum decay
-                    this.velocity.x *= 0.98;
-                    this.velocity.z *= 0.98;
-                    this.position.addScaledVector(this.velocity, dt);
+                    this.velocity.x *= 0.95;
+                    this.velocity.z *= 0.95;
+                    this._applyMovement(new THREE.Vector3(), 0, dt);
 
-                    if (this._slideTimer <= 0 || this.velocity.lengthSq() < 0.5) {
+                    if (this.input.getActionJustPressed('jump') && this.isGrounded) {
+                        this.height = 1.8;
+                        this.velocity.y = this.jumpForce * 1.1;
+                        return this.setState(PlayerState.FALLING);
+                    }
+
+                    if (this._slideTimer <= 0 || (this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z) < 1.0) {
                         this.height = 1.8;
                         this.setState(PlayerState.IDLE);
                     }
@@ -239,6 +249,51 @@ export class PlayerController {
                 exit: () => {
                     this.isSwimming = false;
                 }
+            },
+            [PlayerState.FLYING]: {
+                enter: () => {
+                    this.velocity.set(0, 0, 0);
+                    EventBus.emit('player:flightStarted');
+                },
+                update: (dt) => {
+                    const h = this.input.getAxis('horizontal');
+                    const v = this.input.getAxis('vertical');
+                    const camDir = new THREE.Vector3();
+                    this.camera.getWorldDirection(camDir);
+                    const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(this.camera.quaternion);
+
+                    const flyDir = new THREE.Vector3();
+                    flyDir.addScaledVector(camDir, v);
+                    flyDir.addScaledVector(camRight, h);
+
+                    if (this.input.getAction('jump')) flyDir.y += 1.0;
+                    if (this.input.getAction('crouch')) flyDir.y -= 1.0;
+
+                    if (flyDir.lengthSq() > 0.01) {
+                        flyDir.normalize();
+                        const flySpeed = 16.0;
+                        this.velocity.copy(flyDir).multiplyScalar(flySpeed);
+                        const step = this.velocity.clone().multiplyScalar(dt);
+                        this._resolveCollisions(step);
+                        this.position.add(step);
+
+                        const horiz = new THREE.Vector3(flyDir.x, 0, flyDir.z);
+                        if (horiz.lengthSq() > 0.05) {
+                            horiz.normalize();
+                            this.facingDirection.lerp(horiz, 0.2);
+                            this.rotation.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.facingDirection);
+                        }
+                    } else {
+                        this.velocity.set(0, 0, 0);
+                    }
+
+                    if (this.position.y < this.waterLevel + 1.0) {
+                        this.position.y = this.waterLevel + 1.0;
+                    }
+                },
+                exit: () => {
+                    EventBus.emit('player:flightEnded');
+                }
             }
         };
     }
@@ -276,6 +331,59 @@ export class PlayerController {
         return moveDir;
     }
 
+    setObstacles(colliders) {
+        this.obstacles = colliders || [];
+    }
+
+    _resolveCollisions(step) {
+        if (!this.obstacles || this.obstacles.length === 0) return;
+
+        const pr = this.radius;
+        const nextX = this.position.x + step.x;
+        const nextZ = this.position.z + step.z;
+        const py = this.position.y;
+
+        for (let i = 0; i < this.obstacles.length; i++) {
+            const ob = this.obstacles[i];
+            const minY = ob.minY ?? (ob.min?.y ?? (ob.center ? ob.center.y - 1.0 : -999));
+            const maxY = ob.maxY ?? (ob.max?.y ?? (ob.center ? ob.center.y + (ob.height ?? 30.0) : 999));
+            if (py < minY - 0.5 || py > maxY + 2.0) continue;
+
+            if (ob.type === 'cylinder') {
+                const ox = ob.x ?? ob.position?.x ?? ob.center?.x ?? 0;
+                const oz = ob.z ?? ob.position?.z ?? ob.center?.z ?? 0;
+                const r = (ob.radius || 1.0) + pr;
+                const dx = nextX - ox;
+                const dz = nextZ - oz;
+                const distSq = dx * dx + dz * dz;
+                if (distSq < r * r && distSq > 0.0001) {
+                    const dist = Math.sqrt(distSq);
+                    const push = (r - dist);
+                    step.x += (dx / dist) * push;
+                    step.z += (dz / dist) * push;
+                }
+            } else {
+                const minX = (ob.minX ?? ob.min?.x ?? -1) - pr;
+                const maxX = (ob.maxX ?? ob.max?.x ?? 1) + pr;
+                const minZ = (ob.minZ ?? ob.min?.z ?? -1) - pr;
+                const maxZ = (ob.maxZ ?? ob.max?.z ?? 1) + pr;
+
+                if (nextX > minX && nextX < maxX && nextZ > minZ && nextZ < maxZ) {
+                    const dLeft = Math.abs(nextX - minX);
+                    const dRight = Math.abs(maxX - nextX);
+                    const dTop = Math.abs(nextZ - minZ);
+                    const dBottom = Math.abs(maxZ - nextZ);
+                    const minPush = Math.min(dLeft, dRight, dTop, dBottom);
+
+                    if (minPush === dLeft) step.x -= dLeft;
+                    else if (minPush === dRight) step.x += dRight;
+                    else if (minPush === dTop) step.z -= dTop;
+                    else step.z += dBottom;
+                }
+            }
+        }
+    }
+
     _applyMovement(moveDir, speed, dt) {
         if (moveDir.lengthSq() > 0) {
             this.velocity.x = moveDir.x * speed;
@@ -288,8 +396,10 @@ export class PlayerController {
             this.velocity.z *= 0.85;
         }
 
-        this.position.x += this.velocity.x * dt;
-        this.position.z += this.velocity.z * dt;
+        const step = new THREE.Vector3(this.velocity.x * dt, 0, this.velocity.z * dt);
+        this._resolveCollisions(step);
+        this.position.x += step.x;
+        this.position.z += step.z;
     }
 
     _checkJump() {
@@ -321,6 +431,7 @@ export class PlayerController {
     }
 
     _checkGround(dt) {
+        if (this.currentState === PlayerState.FLYING) return;
         this.raycaster.set(this.position, new THREE.Vector3(0, -1, 0), 0, this.height * 0.5 + 0.1);
         const hits = this.raycaster.intersectObjects(this.scene.children, true);
 
@@ -355,7 +466,7 @@ export class PlayerController {
             this.states[this.currentState].update(dt);
         }
 
-        if (!this.isGrounded && this.currentState !== PlayerState.MANTLING && this.currentState !== PlayerState.GLIDING && this.currentState !== PlayerState.SWIMMING) {
+        if (!this.isGrounded && this.currentState !== PlayerState.MANTLING && this.currentState !== PlayerState.GLIDING && this.currentState !== PlayerState.SWIMMING && this.currentState !== PlayerState.FLYING) {
             this.velocity.y -= this.gravity * dt;
             this.position.y += this.velocity.y * dt;
         }

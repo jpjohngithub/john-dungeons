@@ -10,14 +10,29 @@ export class CharacterModel {
      * Builds a detailed stylized tactical hero with articulated limbs.
      * @returns {THREE.Group}
      */
-    static createHero() {
+    static createHero(options = {}) {
         const root = new THREE.Group();
         root.userData.isHero = true;
 
+        const charType = options.characterType || 'CYBER_STRIKER';
+        let baseArmorColor = 0x2563eb;
+        let shadowArmorColor = 0x0f2042;
+        let visorColor = 0x00f0ff;
+
+        if (charType === 'TITAN_BRAWLER') {
+            baseArmorColor = 0xd97706;
+            shadowArmorColor = 0x451a03;
+            visorColor = 0xfbbf24;
+        } else if (charType === 'GHOST_RECON') {
+            baseArmorColor = 0x334155;
+            shadowArmorColor = 0x090d16;
+            visorColor = 0xef4444;
+        }
+
         // Color palettes
         const armorMat = new StylizedPBRMaterial({
-            baseColor: 0x2563eb,     // Vibrant royal blue
-            shadowColor: 0x0f2042,   // Deep navy shadow
+            baseColor: baseArmorColor,
+            shadowColor: shadowArmorColor,
             rimColor: 0x93c5fd,
             rimPower: 2.2,
             rimIntensity: 1.1,
@@ -43,7 +58,7 @@ export class CharacterModel {
         });
 
         const glowMat = new THREE.MeshBasicMaterial({
-            color: 0x00f0ff
+            color: visorColor
         });
 
         const goldMat = new THREE.MeshStandardMaterial({
@@ -180,10 +195,19 @@ export class CharacterModel {
         leftForearm.castShadow = true;
         leftElbowPivot.add(leftForearm);
 
-        // Glove/Hand
+        // Glove/Hand with Cyber Laser Emitter
         const leftHand = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.09, 0.09), darkArmorMat);
         leftHand.position.set(0, -0.30, 0);
         leftElbowPivot.add(leftHand);
+
+        const laserEmitter = new THREE.Mesh(
+            new THREE.CylinderGeometry(0.035, 0.045, 0.06, 8),
+            new THREE.MeshBasicMaterial({ color: 0x00f5ff })
+        );
+        laserEmitter.rotation.x = Math.PI / 2;
+        laserEmitter.position.set(0, 0, 0.05);
+        leftHand.add(laserEmitter);
+        leftHand.userData.laserEmitter = laserEmitter;
 
         // ── RIGHT ARM ───────────────────────────────────────────────
         const rightShoulderPivot = new THREE.Group();
@@ -291,6 +315,7 @@ export class CharacterModel {
             head: headPivot,
             leftShoulder: leftShoulderPivot,
             leftElbow: leftElbowPivot,
+            leftHand,
             rightShoulder: rightShoulderPivot,
             rightElbow: rightElbowPivot,
             leftHip: leftHipPivot,
@@ -588,6 +613,24 @@ export class CharacterModel {
             if (rig.leftHip) rig.leftHip.rotation.x = -1.1;
             if (rig.rightHip) rig.rightHip.rotation.x = 0.6;
             if (rig.rightKnee) rig.rightKnee.rotation.x = 1.2;
+
+        } else if (state === 'FLYING') {
+            // ── SUPER FLIGHT POSE ───────────────────────────────────
+            rig.pelvis.rotation.x = THREE.MathUtils.lerp(rig.pelvis.rotation.x, 1.2, lerpFactor);
+            rig.torso.rotation.x = THREE.MathUtils.lerp(rig.torso.rotation.x, 0.2, lerpFactor);
+            rig.head.rotation.x = THREE.MathUtils.lerp(rig.head.rotation.x, -0.9, lerpFactor);
+            if (rig.leftShoulder) {
+                rig.leftShoulder.rotation.x = -1.4;
+                rig.leftShoulder.rotation.z = -0.3;
+            }
+            if (rig.rightShoulder) {
+                rig.rightShoulder.rotation.x = -1.4;
+                rig.rightShoulder.rotation.z = 0.3;
+            }
+            if (rig.leftHip) rig.leftHip.rotation.x = 0.1;
+            if (rig.rightHip) rig.rightHip.rotation.x = 0.1;
+            if (rig.leftKnee) rig.leftKnee.rotation.x = 0.2;
+            if (rig.rightKnee) rig.rightKnee.rotation.x = 0.2;
 
         } else {
             // ── IDLE POSE ───────────────────────────────────────────

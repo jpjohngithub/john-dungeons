@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file main.js — John Dungeons: AAA Stylized TPS Battle Royale & Survival Core Loop
  * Features:
  * - Real Combat (Left Click to Shoot hitscan/projectiles, recoil, muzzle flash, impact sparks)
@@ -19,6 +19,7 @@ import { CharacterModel } from './player/CharacterModel.js';
 import { StylizedPBRMaterial } from './rendering/StylizedPBRMaterial.js';
 import { DayNightCycle } from './rendering/DayNightCycle.js';
 import StormManager from './battleroyale/StormManager.js';
+import { CityBuilder } from './battleroyale/CityBuilder.js';
 import { AttributeSet } from './gas/AttributeSet.js';
 
 // ─── AUDIO SYNTHESIZER (ZERO ASSET DEPENDENCY) ──────────────────────
@@ -109,6 +110,36 @@ class SoundFX {
         osc.start(now);
         osc.stop(now + 0.15);
     }
+    playLaser() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sawtooth';
+        osc.frequency.setValueAtTime(880, now);
+        osc.frequency.linearRampToValueAtTime(1400, now + 0.15);
+        gain.gain.setValueAtTime(0.18, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.15);
+    }
+    playFlight() {
+        if (!this.ctx) return;
+        const now = this.ctx.currentTime;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(180, now);
+        osc.frequency.linearRampToValueAtTime(340, now + 0.35);
+        gain.gain.setValueAtTime(0.25, now);
+        gain.gain.exponentialRampToValueAtTime(0.01, now + 0.35);
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+        osc.start(now);
+        osc.stop(now + 0.35);
+    }
 }
 const sfx = new SoundFX();
 
@@ -119,11 +150,30 @@ let playerGroup, playerAttributes;
 let dayNight, stormManager;
 let terrain, waterPlane;
 const trees = [], rocks = [], pickups = [];
-const enemies = [], bullets = [], fireballs = [], damageNumbers = [], particles = [], placedWalls = [];
+const enemies = [], bullets = [], damageNumbers = [], particles = [], placedStructures = [];
+let allObstacles = [];
 let hud = {};
 let pointerLocked = false;
-let kills = 0, materials = 100, abilityCooldown = 0;
+let gameStarted = false;
+let selectedCharacter = 'CYBER_STRIKER';
+let selectedClass = 'ASSAULT';
+let kills = 0, materials = 150;
 let lastShotTime = 0;
+
+// Hand Laser & Super Flight State
+let isLaserActive = false;
+let laserTimer = 0;
+let laserCooldown = 0;
+let laserMesh = null;
+let laserLight = null;
+let superFlightTimer = 0;
+let superCooldown = 0;
+
+// Modular Building State
+let isBuildMode = false;
+let buildType = 'WALL'; // 'WALL', 'RAMP', 'FLOOR'
+let ghostMesh = null;
+let ghostMaterial = null;
 
 // ─── INIT ───────────────────────────────────────────────────────────
 function init() {
@@ -176,6 +226,28 @@ function init() {
     createVegetation(60, 140);
     createPickups(40);
 
+    // Urban City Center
+    const cityData = CityBuilder.buildCity(scene, getTerrainHeight);
+
+    // Solid Physics Obstacles Colliders
+    allObstacles = [...cityData.colliders];
+    for (const r of rocks) {
+        allObstacles.push({
+            type: 'cylinder',
+            center: r.position,
+            radius: r.scale.x * 0.95,
+            height: r.scale.y * 2.0
+        });
+    }
+    for (const t of trees) {
+        allObstacles.push({
+            type: 'cylinder',
+            center: t.position,
+            radius: 0.55,
+            height: 4.5
+        });
+    }
+
     // Gameplay Attributes (GAS)
     playerAttributes = new AttributeSet();
 
@@ -184,9 +256,13 @@ function init() {
     createPlayer();
     playerController = new PlayerController(camera, inputManager, scene);
     playerController.position.copy(playerGroup.position);
+    playerController.setObstacles(allObstacles);
     cameraController = new CameraController(camera, inputManager, scene);
     cameraController.attach(playerGroup);
-    cameraController.setCollisionObjects([terrain, ...rocks]);
+    cameraController.setCollisionObjects([terrain, cityData.group, ...rocks, ...trees]);
+
+    // Modular Building Preview Ghost
+    initGhostMesh();
 
     // Storm
     stormManager = new StormManager(scene);
@@ -195,12 +271,14 @@ function init() {
     // Spawn AI Enemies
     spawnEnemies(10);
 
-    // Setup HUD UI
+    // Setup HUD UI & Lobby Menu
     createHUD();
+    createLobbyUI();
 
     // Listeners
     setupKeyListeners();
     renderer.domElement.addEventListener('click', () => {
+        if (!gameStarted) return;
         sfx.init();
         renderer.domElement.requestPointerLock();
     });
@@ -434,10 +512,12 @@ function createPickups(count) {
 }
 
 // ─── PLAYER CHARACTER ───────────────────────────────────────────────
-function createPlayer() {
-    playerGroup = CharacterModel.createHero();
+function createPlayer(charType = selectedCharacter) {
+    if (playerGroup) scene.remove(playerGroup);
+    playerGroup = CharacterModel.createHero({ characterType: charType });
     playerGroup.position.set(0, getTerrainHeight(0, 0) + 0.1, 0);
     scene.add(playerGroup);
+    if (cameraController) cameraController.attach(playerGroup);
 }
 
 // ─── AI ENEMIES (BOTS) ──────────────────────────────────────────────
@@ -601,123 +681,303 @@ function updateBullets(dt) {
     }
 }
 
-// ─── RPG ABILITY: FIREBALL (PRESS '1') ───────────────────────────────
-function castFireball() {
-    if (abilityCooldown > 0) return;
-    abilityCooldown = 4.0; // 4s cooldown
+// ─── CYBER ABILITY: HAND LASER BEAM (KEY [1]) ─────────────────────────
+function triggerHandLaser() {
+    if (laserCooldown > 0) {
+        showNotification(`Laser Recharging... (${Math.ceil(laserCooldown)}s)`);
+        return;
+    }
+    isLaserActive = true;
+    laserTimer = 2.4;
+    laserCooldown = 5.0;
+    sfx.playLaser();
+    showNotification('CYBER HAND LASER ACTIVATED!');
+}
 
-    sfx.playExplosion();
+function updateLaser(dt) {
+    if (laserCooldown > 0) {
+        laserCooldown -= dt;
+    }
 
-    const spawnPos = playerGroup.position.clone().add(new THREE.Vector3(0, 1.5, 0));
-    const dir = new THREE.Vector3();
-    camera.getWorldDirection(dir);
+    if (!isLaserActive) {
+        if (laserMesh) laserMesh.visible = false;
+        if (laserLight) laserLight.visible = false;
+        return;
+    }
 
-    const geo = new THREE.SphereGeometry(0.4, 8, 8);
-    const mat = new THREE.MeshBasicMaterial({ color: 0xff5500 });
-    const mesh = new THREE.Mesh(geo, mat);
-    mesh.position.copy(spawnPos);
-    scene.add(mesh);
+    laserTimer -= dt;
+    if (laserTimer <= 0) {
+        isLaserActive = false;
+        if (laserMesh) laserMesh.visible = false;
+        if (laserLight) laserLight.visible = false;
+        return;
+    }
 
-    fireballs.push({
-        mesh,
-        dir,
-        speed: 35,
-        lifetime: 3.0
+    const rig = playerGroup?.userData?.rig;
+    const hand = rig?.leftHand;
+    let handPos = new THREE.Vector3();
+    if (hand) {
+        hand.getWorldPosition(handPos);
+    } else {
+        handPos.copy(playerGroup.position).add(new THREE.Vector3(-0.35, 1.3, 0.3));
+    }
+
+    if (rig?.leftShoulder) rig.leftShoulder.rotation.x = -1.45;
+    if (rig?.leftElbow) rig.leftElbow.rotation.x = 0;
+
+    const camDir = new THREE.Vector3();
+    camera.getWorldDirection(camDir);
+
+    const ray = new THREE.Raycaster(camera.position, camDir, 0.5, 100);
+    const hitCandidates = [];
+    for (const en of enemies) {
+        if (!en.userData.isDead) hitCandidates.push(en);
+    }
+    const hits = ray.intersectObjects(hitCandidates, true);
+
+    let targetPoint = camera.position.clone().add(camDir.clone().multiplyScalar(65));
+    let hitBot = null;
+    if (hits.length > 0) {
+        targetPoint.copy(hits[0].point);
+        let cur = hits[0].object;
+        while (cur && !cur.userData?.id) cur = cur.parent;
+        hitBot = cur;
+    }
+
+    const distance = Math.max(0.5, handPos.distanceTo(targetPoint));
+    const midPoint = handPos.clone().add(targetPoint).multiplyScalar(0.5);
+
+    if (!laserMesh) {
+        laserMesh = new THREE.Group();
+        const outerGeo = new THREE.CylinderGeometry(0.12, 0.12, 1, 8);
+        outerGeo.rotateX(Math.PI / 2);
+        const outerMat = new THREE.MeshBasicMaterial({ color: 0x00f5ff, transparent: true, opacity: 0.85 });
+        laserMesh.add(new THREE.Mesh(outerGeo, outerMat));
+
+        const coreGeo = new THREE.CylinderGeometry(0.04, 0.04, 1, 8);
+        coreGeo.rotateX(Math.PI / 2);
+        const coreMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        laserMesh.add(new THREE.Mesh(coreGeo, coreMat));
+
+        scene.add(laserMesh);
+
+        laserLight = new THREE.PointLight(0x00f5ff, 2.5, 12);
+        scene.add(laserLight);
+    }
+
+    laserMesh.visible = true;
+    laserLight.visible = true;
+    laserMesh.position.copy(midPoint);
+    laserMesh.scale.set(1, 1, distance);
+    laserMesh.lookAt(targetPoint);
+    laserLight.position.copy(targetPoint);
+
+    cameraController.addShake(0.12, 0.05);
+
+    if (hitBot && hitBot.userData && !hitBot.userData.isDead) {
+        const dpsMultiplier = selectedClass === 'ASSAULT' ? 1.25 : 1.0;
+        applyDamageToEnemy(hitBot, Math.round(180 * dpsMultiplier * dt), targetPoint);
+    }
+    spawnLaserSparks(targetPoint);
+}
+
+// ─── SUPER ABILITY: FLIGHT MODE (KEY [E] / [4]) ───────────────────────
+function triggerSuperFlight() {
+    if (superCooldown > 0) {
+        showNotification(`Super Recharging... (${Math.ceil(superCooldown)}s)`);
+        return;
+    }
+    superFlightTimer = selectedClass === 'SCOUT' ? 14.0 : 10.0;
+    superCooldown = 20.0;
+    playerController.setState('FLYING');
+    sfx.playFlight();
+    showNotification('SUPER ACTIVATED: FLIGHT OVERDRIVE! [WASD] Fly | [SPACE] Up | [C] Down');
+}
+
+function updateSuperFlight(dt) {
+    if (superCooldown > 0) {
+        superCooldown -= dt;
+    }
+
+    if (playerController.currentState === 'FLYING') {
+        superFlightTimer -= dt;
+
+        const pp = playerController.position;
+        for (let i = 0; i < 2; i++) {
+            const pGeo = new THREE.BoxGeometry(0.08, 0.08, 0.08);
+            const pMat = new THREE.MeshBasicMaterial({ color: Math.random() > 0.4 ? 0x00f5ff : 0x38bdf8 });
+            const pMesh = new THREE.Mesh(pGeo, pMat);
+            pMesh.position.set(pp.x + (i === 0 ? -0.2 : 0.2), pp.y - 0.4, pp.z);
+            scene.add(pMesh);
+            particles.push({
+                mesh: pMesh,
+                vel: new THREE.Vector3((Math.random() - 0.5) * 1.5, -Math.random() * 5 - 2, (Math.random() - 0.5) * 1.5),
+                life: 0.25
+            });
+        }
+
+        if (superFlightTimer <= 0) {
+            playerController.setState('FALLING');
+            showNotification('Flight Energy Depleted.');
+        }
+    }
+}
+
+// ─── MODULAR BUILDING SYSTEM (KEY [F], [Q]=WALL, [E]=RAMP, [C]=FLOOR) ───
+function initGhostMesh() {
+    ghostMaterial = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.75
     });
 
-    showNotification('Plasma Burst Discharged!');
+    ghostMesh = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.8, 0.35), ghostMaterial);
+    ghostMesh.visible = false;
+    scene.add(ghostMesh);
 }
 
-function updateFireballs(dt) {
-    for (let i = fireballs.length - 1; i >= 0; i--) {
-        const fb = fireballs[i];
-        fb.mesh.position.addScaledVector(fb.dir, fb.speed * dt);
-        fb.lifetime -= dt;
-
-        // Check explosion against enemies or ground
-        let explode = false;
-        const blastPos = fb.mesh.position.clone();
-
-        for (const enemy of enemies) {
-            if (!enemy.userData.isDead && blastPos.distanceTo(enemy.position) < 2.5) {
-                explode = true;
-                break;
-            }
-        }
-        if (blastPos.y < getTerrainHeight(blastPos.x, blastPos.z) + 0.5) {
-            explode = true;
-        }
-
-        if (explode || fb.lifetime <= 0) {
-            triggerExplosion(blastPos, 6.0, 60);
-            scene.remove(fb.mesh);
-            fireballs.splice(i, 1);
-        }
+function toggleBuildMode() {
+    isBuildMode = !isBuildMode;
+    if (ghostMesh) ghostMesh.visible = isBuildMode;
+    if (isBuildMode) {
+        showNotification('BUILD MODE: [Q] Wall | [E] Ramp | [C] Floor | [L-Click] Place | [F] Cancel');
+        setBuildType(buildType);
+    } else {
+        showNotification('Combat Mode Resumed');
     }
 }
 
-function triggerExplosion(pos, radius, damage) {
-    sfx.playExplosion();
-    cameraController.addShake(0.8, 0.3);
+function setBuildType(type) {
+    buildType = type;
+    if (!ghostMesh) return;
+    scene.remove(ghostMesh);
 
-    // Blast damage to enemies
-    for (const enemy of enemies) {
-        if (enemy.userData.isDead) continue;
-        const d = enemy.position.distanceTo(pos);
-        if (d < radius) {
-            const scaledDmg = Math.round(damage * (1 - d / radius));
-            applyDamageToEnemy(enemy, scaledDmg, enemy.position.clone().add(new THREE.Vector3(0, 1.5, 0)));
-        }
+    if (buildType === 'WALL') {
+        ghostMesh = new THREE.Mesh(new THREE.BoxGeometry(3.2, 2.8, 0.35), ghostMaterial);
+    } else if (buildType === 'RAMP') {
+        ghostMesh = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.25, 4.0), ghostMaterial);
+        ghostMesh.rotation.x = Math.PI / 5;
+    } else if (buildType === 'FLOOR') {
+        ghostMesh = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.25, 3.2), ghostMaterial);
+    }
+    ghostMesh.visible = isBuildMode;
+    scene.add(ghostMesh);
+}
+
+function updateGhostBuilding() {
+    if (!isBuildMode || !ghostMesh) return;
+
+    const fwd = new THREE.Vector3();
+    camera.getWorldDirection(fwd);
+    fwd.y = 0;
+    fwd.normalize();
+
+    const pp = playerController.position;
+    const targetPos = pp.clone().add(fwd.clone().multiplyScalar(3.8));
+
+    const snapGrid = 3.0;
+    const sx = Math.round(targetPos.x / snapGrid) * snapGrid;
+    const sz = Math.round(targetPos.z / snapGrid) * snapGrid;
+    const groundY = getTerrainHeight(sx, sz);
+    const sy = Math.max(groundY + (buildType === 'FLOOR' ? 1.4 : 1.4), Math.round(targetPos.y / 2.5) * 2.5);
+
+    ghostMesh.position.set(sx, sy, sz);
+
+    const yaw = Math.atan2(fwd.x, fwd.z);
+    const snapYaw = Math.round(yaw / (Math.PI / 2)) * (Math.PI / 2);
+    ghostMesh.rotation.y = snapYaw;
+    if (buildType === 'RAMP') {
+        ghostMesh.rotation.x = 0.55;
+    } else {
+        ghostMesh.rotation.x = 0;
+    }
+}
+
+function placeStructure() {
+    if (materials < 15) {
+        showNotification('Need 15 Materials to Build!');
+        return;
+    }
+    materials -= 15;
+    sfx.playBuild();
+
+    const pos = ghostMesh.position.clone();
+    const rotY = ghostMesh.rotation.y;
+    const rotX = ghostMesh.rotation.x;
+
+    let geo, collider;
+    const mat = new StylizedPBRMaterial({
+        baseColor: 0x475569,
+        shadowColor: 0x1e293b,
+        rimColor: 0x94a3b8,
+        rimPower: 2.5,
+        rimIntensity: 0.6,
+        celSteps: 3.0
+    });
+
+    if (buildType === 'WALL') {
+        geo = new THREE.BoxGeometry(3.2, 2.8, 0.35);
+        collider = {
+            type: 'box',
+            min: new THREE.Vector3(pos.x - 1.6, pos.y - 1.4, pos.z - 1.6),
+            max: new THREE.Vector3(pos.x + 1.6, pos.y + 1.4, pos.z + 1.6),
+            minX: pos.x - 1.6, maxX: pos.x + 1.6,
+            minZ: pos.z - 1.6, maxZ: pos.z + 1.6,
+            minY: pos.y - 1.4, maxY: pos.y + 1.4
+        };
+    } else if (buildType === 'RAMP') {
+        geo = new THREE.BoxGeometry(3.2, 0.25, 4.0);
+        collider = {
+            type: 'box',
+            min: new THREE.Vector3(pos.x - 1.6, pos.y - 1.2, pos.z - 1.6),
+            max: new THREE.Vector3(pos.x + 1.6, pos.y + 1.2, pos.z + 1.6),
+            minX: pos.x - 1.6, maxX: pos.x + 1.6,
+            minZ: pos.z - 1.6, maxZ: pos.z + 1.6,
+            minY: pos.y - 1.2, maxY: pos.y + 1.2
+        };
+    } else {
+        geo = new THREE.BoxGeometry(3.2, 0.25, 3.2);
+        collider = {
+            type: 'box',
+            min: new THREE.Vector3(pos.x - 1.6, pos.y - 0.2, pos.z - 1.6),
+            max: new THREE.Vector3(pos.x + 1.6, pos.y + 0.2, pos.z + 1.6),
+            minX: pos.x - 1.6, maxX: pos.x + 1.6,
+            minZ: pos.z - 1.6, maxZ: pos.z + 1.6,
+            minY: pos.y - 0.2, maxY: pos.y + 0.2
+        };
     }
 
-    // Explosion particles
-    for (let i = 0; i < 20; i++) {
-        const pGeo = new THREE.DodecahedronGeometry(0.25, 0);
-        const pMat = new THREE.MeshBasicMaterial({ color: Math.random() > 0.5 ? 0xff3300 : 0xffbb00 });
-        const pMesh = new THREE.Mesh(pGeo, pMat);
-        pMesh.position.copy(pos);
-        scene.add(pMesh);
+    const structureMesh = new THREE.Mesh(geo, mat);
+    structureMesh.position.copy(pos);
+    structureMesh.rotation.y = rotY;
+    structureMesh.rotation.x = rotX;
+    structureMesh.castShadow = true;
+    structureMesh.receiveShadow = true;
+    scene.add(structureMesh);
+
+    placedStructures.push(structureMesh);
+    allObstacles.push(collider);
+    playerController.setObstacles(allObstacles);
+    cameraController.setCollisionObjects([terrain, ...rocks, ...trees, ...placedStructures]);
+
+    showNotification(`${buildType} Placed (-15 Materials)`);
+}
+
+function spawnLaserSparks(pos) {
+    for (let i = 0; i < 4; i++) {
+        const pGeo = new THREE.BoxGeometry(0.06, 0.06, 0.06);
+        const pMat = new THREE.MeshBasicMaterial({ color: 0x00f5ff });
+        const mesh = new THREE.Mesh(pGeo, pMat);
+        mesh.position.copy(pos);
+        scene.add(mesh);
         particles.push({
-            mesh: pMesh,
-            vel: new THREE.Vector3((Math.random() - 0.5) * 15, Math.random() * 12 + 2, (Math.random() - 0.5) * 15),
-            life: 0.6
+            mesh,
+            vel: new THREE.Vector3((Math.random() - 0.5) * 8, Math.random() * 8 + 2, (Math.random() - 0.5) * 8),
+            life: 0.25
         });
     }
 }
-
-// ─── SURVIVAL BUILDING: WOODEN WALL (PRESS 'F') ──────────────────────
-function buildWall() {
-    if (materials < 20) {
-        showNotification('❌ Need 20 Wood to Build!');
-        return;
-    }
-    materials -= 20;
-    sfx.playBuild();
-
-    const forward = new THREE.Vector3();
-    camera.getWorldDirection(forward);
-    forward.y = 0;
-    forward.normalize();
-
-    const wallPos = playerGroup.position.clone().add(forward.multiplyScalar(3.0));
-    const snappedX = Math.round(wallPos.x / 2) * 2;
-    const snappedZ = Math.round(wallPos.z / 2) * 2;
-    const groundY = getTerrainHeight(snappedX, snappedZ);
-
-    const geo = new THREE.BoxGeometry(3.0, 2.5, 0.4);
-    const mat = new StylizedPBRMaterial({ baseColor: 0x8b5a2b, shadowColor: 0x3d230f, celSteps: 3 });
-    const wall = new THREE.Mesh(geo, mat);
-    wall.position.set(snappedX, groundY + 1.25, snappedZ);
-    wall.rotation.y = Math.atan2(forward.x, forward.z);
-    wall.castShadow = true;
-    wall.receiveShadow = true;
-    scene.add(wall);
-    placedWalls.push(wall);
-    cameraController.setCollisionObjects([terrain, ...rocks, ...placedWalls]);
-
-    showNotification('Tactical Barrier Deployed (-20 Materials)');
-}
-
 // ─── DAMAGE & FLOATING NUMBERS ──────────────────────────────────────
 function applyDamageToEnemy(enemy, amount, hitPoint) {
     enemy.userData.health -= amount;
@@ -823,16 +1083,51 @@ function updateParticles(dt) {
 // ─── KEYS & LISTENERS ───────────────────────────────────────────────
 function setupKeyListeners() {
     window.addEventListener('mousedown', (e) => {
-        if (pointerLocked && e.button === 0) {
-            shootWeapon();
+        if (!gameStarted || !pointerLocked) return;
+        if (e.button === 0) {
+            if (isBuildMode) {
+                placeStructure();
+            } else {
+                shootWeapon();
+            }
+        } else if (e.button === 2) {
+            if (isBuildMode) {
+                toggleBuildMode();
+            }
         }
     });
 
     window.addEventListener('keydown', (e) => {
-        if (e.code === 'Digit1') castFireball();
-        if (e.code === 'KeyF') buildWall();
+        if (!gameStarted) return;
+        if (e.code === 'Digit1' || e.code === 'KeyQ') {
+            if (isBuildMode) {
+                setBuildType('WALL');
+                showNotification('Build Selection: WALL');
+            } else {
+                triggerHandLaser();
+            }
+        }
+        if (e.code === 'Digit2' || e.code === 'KeyE') {
+            if (isBuildMode) {
+                setBuildType('RAMP');
+                showNotification('Build Selection: RAMP');
+            } else {
+                triggerSuperFlight();
+            }
+        }
+        if (e.code === 'Digit3' || e.code === 'KeyC') {
+            if (isBuildMode) {
+                setBuildType('FLOOR');
+                showNotification('Build Selection: FLOOR');
+            }
+        }
+        if (e.code === 'Digit4' || e.code === 'KeyV') {
+            triggerSuperFlight();
+        }
+        if (e.code === 'KeyF') {
+            toggleBuildMode();
+        }
         if (e.code === 'KeyR' && playerAttributes.get('health') <= 0) {
-            // Respawn
             playerAttributes.modify('health', 100, 'override');
             playerAttributes.modify('shield', 50, 'override');
             playerController.position.set(0, getTerrainHeight(0, 0) + 1, 0);
@@ -911,18 +1206,25 @@ function createHUD() {
                     <div style="font-size:13px;font-weight:800;color:#ffffff;letter-spacing:0.5px;">RIFLE</div>
                 </div>
             </div>
-            <div id="slot-ability" style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(249,115,22,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>
+            <div id="slot-laser" style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(56,189,248,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#38bdf8" stroke-width="2"><circle cx="12" cy="12" r="3"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="12" y1="3" x2="12" y2="21"/></svg>
                 <div>
-                    <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">KEY [1]</div>
-                    <div id="ability-cd-text" style="font-size:13px;font-weight:800;color:#ffffff;letter-spacing:0.5px;">READY</div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">[1] / [Q]</div>
+                    <div id="laser-cd-text" style="font-size:13px;font-weight:800;color:#38bdf8;letter-spacing:0.5px;">HAND LASER</div>
                 </div>
             </div>
-            <div style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(16,185,129,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="15"/><line x1="15" y1="9" x2="15" y2="15"/><line x1="12" y1="3" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="21"/></svg>
+            <div id="slot-flight" style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(168,85,247,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#c084fc" stroke-width="2"><path d="M12 2l3 7h6l-5 4 2 7-6-4-6 4 2-7-5-4h6z"/></svg>
+                <div>
+                    <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">[E] / [4]</div>
+                    <div id="flight-cd-text" style="font-size:13px;font-weight:800;color:#c084fc;letter-spacing:0.5px;">SUPER VOO</div>
+                </div>
+            </div>
+            <div id="slot-build" style="background:rgba(15,23,42,0.88);backdrop-filter:blur(14px);padding:8px 16px;border-radius:8px;border:1px solid rgba(16,185,129,0.5);display:flex;align-items:center;gap:10px;box-shadow:0 6px 20px rgba(0,0,0,0.35);">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="9" x2="9" y2="15"/><line x1="15" y1="9" x2="15" y2="15"/></svg>
                 <div>
                     <div style="font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;">KEY [F]</div>
-                    <div style="font-size:13px;font-weight:800;color:#ffffff;letter-spacing:0.5px;">WALL (20)</div>
+                    <div id="build-mode-text" style="font-size:13px;font-weight:800;color:#10b981;letter-spacing:0.5px;">CONSTRUIR</div>
                 </div>
             </div>
         </div>
@@ -955,9 +1257,120 @@ function createHUD() {
         fps: document.getElementById('hud-fps'),
         minimap: document.getElementById('minimap-canvas'),
         notif: document.getElementById('hud-notif'),
-        abilityCd: document.getElementById('ability-cd-text'),
+        laserCd: document.getElementById('laser-cd-text'),
+        flightCd: document.getElementById('flight-cd-text'),
+        buildText: document.getElementById('build-mode-text'),
         dmgContainer: document.getElementById('damage-container')
     };
+}
+
+function createLobbyUI() {
+    const lobby = document.createElement('div');
+    lobby.id = 'start-lobby-menu';
+    lobby.innerHTML = `
+        <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(135deg,rgba(10,15,30,0.92) 0%,rgba(5,7,15,0.96) 100%);backdrop-filter:blur(18px);z-index:99;display:flex;flex-direction:column;align-items:center;justify-content:center;font-family:system-ui,-apple-system,sans-serif;color:#fff;">
+            <div style="max-width:860px;width:92%;background:rgba(15,23,42,0.85);border:1px solid rgba(56,189,248,0.25);border-radius:16px;padding:32px 36px;box-shadow:0 25px 60px rgba(0,0,0,0.6);display:flex;flex-direction:column;gap:24px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid rgba(255,255,255,0.1);padding-bottom:16px;">
+                    <div>
+                        <div style="font-size:26px;font-weight:900;letter-spacing:3px;color:#38bdf8;text-shadow:0 0 20px rgba(56,189,248,0.5);">JOHN DUNGEONS</div>
+                        <div style="font-size:12px;color:#94a3b8;letter-spacing:1.5px;font-weight:600;">TACTICAL BATTLE ROYALE & CITY COMBAT</div>
+                    </div>
+                    <div style="background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.4);border-radius:20px;padding:6px 16px;font-size:11px;font-weight:800;color:#7dd3fc;letter-spacing:1px;">
+                        SYSTEM ONLINE
+                    </div>
+                </div>
+
+                <div>
+                    <div style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:#94a3b8;margin-bottom:10px;">SELECIONE SEU PERSONAGEM</div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="char-selector-grid">
+                        <div class="char-card active" data-char="CYBER_STRIKER" style="cursor:pointer;background:rgba(30,41,59,0.8);border:2px solid #38bdf8;border-radius:10px;padding:14px;transition:all 0.2s;">
+                            <div style="font-size:14px;font-weight:800;color:#38bdf8;margin-bottom:4px;">CYBER-STRIKER</div>
+                            <div style="font-size:11px;color:#cbd5e1;line-height:1.4;">Ciborgue de combate avançado com emissor de Laser nas mãos.</div>
+                        </div>
+                        <div class="char-card" data-char="TITAN_BRAWLER" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
+                            <div style="font-size:14px;font-weight:800;color:#f59e0b;margin-bottom:4px;">TITAN BRAWLER</div>
+                            <div style="font-size:11px;color:#cbd5e1;line-height:1.4;">Exoesqueleto pesado fortificado com armadura de nanocarbono.</div>
+                        </div>
+                        <div class="char-card" data-char="GHOST_RECON" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
+                            <div style="font-size:14px;font-weight:800;color:#ef4444;margin-bottom:4px;">GHOST RECON</div>
+                            <div style="font-size:11px;color:#cbd5e1;line-height:1.4;">Ninja tático ágil equipado com propulsores ultrarrápidos.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <div style="font-size:12px;font-weight:800;letter-spacing:1.5px;color:#94a3b8;margin-bottom:10px;">SELECIONE SUA CLASSE TÁTICA</div>
+                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;" id="class-selector-grid">
+                        <div class="class-card active" data-class="ASSAULT" style="cursor:pointer;background:rgba(30,41,59,0.8);border:2px solid #38bdf8;border-radius:10px;padding:14px;transition:all 0.2s;">
+                            <div style="font-size:14px;font-weight:800;color:#38bdf8;margin-bottom:4px;">ASSAULT</div>
+                            <div style="font-size:11px;color:#94a3b8;line-height:1.4;">+25% Dano Laser • Cooldown Reduzido</div>
+                        </div>
+                        <div class="class-card" data-class="VANGUARD" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
+                            <div style="font-size:14px;font-weight:800;color:#10b981;margin-bottom:4px;">VANGUARD</div>
+                            <div style="font-size:11px;color:#94a3b8;line-height:1.4;">+75 Escudo Máximo • Regeneração</div>
+                        </div>
+                        <div class="class-card" data-class="SCOUT" style="cursor:pointer;background:rgba(30,41,59,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:14px;transition:all 0.2s;">
+                            <div style="font-size:14px;font-weight:800;color:#facc15;margin-bottom:4px;">SCOUT</div>
+                            <div style="font-size:11px;color:#94a3b8;line-height:1.4;">+30% Velocidade • Super Voo Prolongado</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="display:flex;justify-content:center;margin-top:8px;">
+                    <button id="btn-start-game" style="background:linear-gradient(90deg,#0284c7,#38bdf8);border:none;border-radius:10px;padding:16px 48px;font-size:16px;font-weight:900;letter-spacing:2px;color:#ffffff;cursor:pointer;box-shadow:0 8px 24px rgba(56,189,248,0.4);transition:all 0.2s;">
+                        INICIAR PARTIDA
+                    </button>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.appendChild(lobby);
+
+    const charCards = lobby.querySelectorAll('.char-card');
+    charCards.forEach((card) => {
+        card.addEventListener('click', () => {
+            charCards.forEach((c) => {
+                c.style.borderColor = 'rgba(255,255,255,0.1)';
+                c.style.background = 'rgba(30,41,59,0.5)';
+            });
+            card.style.borderColor = '#38bdf8';
+            card.style.background = 'rgba(30,41,59,0.85)';
+            selectedCharacter = card.getAttribute('data-char');
+            createPlayer(selectedCharacter);
+        });
+    });
+
+    const classCards = lobby.querySelectorAll('.class-card');
+    classCards.forEach((card) => {
+        card.addEventListener('click', () => {
+            classCards.forEach((c) => {
+                c.style.borderColor = 'rgba(255,255,255,0.1)';
+                c.style.background = 'rgba(30,41,59,0.5)';
+            });
+            card.style.borderColor = '#38bdf8';
+            card.style.background = 'rgba(30,41,59,0.85)';
+            selectedClass = card.getAttribute('data-class');
+        });
+    });
+
+    const startBtn = document.getElementById('btn-start-game');
+    startBtn.addEventListener('click', () => {
+        sfx.init();
+        sfx.playFlight();
+        gameStarted = true;
+        lobby.style.display = 'none';
+
+        if (selectedClass === 'VANGUARD') {
+            playerAttributes.modify('shield', 100, 'override');
+        } else if (selectedClass === 'SCOUT') {
+            playerController.walkSpeed = 5.2;
+            playerController.sprintSpeed = 9.2;
+        }
+
+        renderer.domElement.requestPointerLock();
+        showNotification('PARTIDA INICIADA — ZONA DE COMBATE LIBERADA!');
+    });
 }
 
 let notifTimer;
@@ -1095,17 +1508,19 @@ function animate() {
             spawnWaterRipples(playerController.position);
         }
     } else {
-        if (playerController.position.y < ty + 0.9) {
-            playerController.position.y = ty + 0.9;
-            playerController.velocity.y = 0;
-            playerController.isGrounded = true;
+        if (playerController.currentState !== 'FLYING') {
+            if (playerController.position.y < ty + 0.9) {
+                playerController.position.y = ty + 0.9;
+                playerController.velocity.y = 0;
+                playerController.isGrounded = true;
+            }
         }
     }
 
     playerGroup.position.copy(playerController.position);
     playerGroup.quaternion.copy(playerController.rotation);
 
-    // Animate articulated 3D character (walk, sprint, swim, idle)
+    // Animate articulated 3D character (walk, sprint, swim, idle, flight)
     CharacterModel.updateAnimation(playerGroup, playerController.currentState, dt);
 
     // Animate water ocean waves
@@ -1122,26 +1537,38 @@ function animate() {
     // Storm Tick
     if (stormManager) {
         stormManager.update(dt);
-        // Apply storm damage if player is outside safe radius
         const p2d = new THREE.Vector2(playerController.position.x, playerController.position.z);
         if (p2d.distanceTo(stormManager.currentCenter) > stormManager.currentRadius) {
             applyDamageToPlayer(10 * dt);
         }
     }
 
-    // AI & Projectiles
+    // AI, Abilities & Building
     updateEnemies(dt);
     updateBullets(dt);
-    updateFireballs(dt);
+    updateLaser(dt);
+    updateSuperFlight(dt);
+    updateGhostBuilding();
     updateParticles(dt);
     checkPickups();
 
-    // Ability Cooldown
-    if (abilityCooldown > 0) {
-        abilityCooldown = Math.max(0, abilityCooldown - dt);
-        if (hud.abilityCd) hud.abilityCd.textContent = `${abilityCooldown.toFixed(1)}s`;
+    // Ability Cooldown Display
+    if (laserCooldown > 0) {
+        if (hud.laserCd) hud.laserCd.textContent = `${laserCooldown.toFixed(1)}s`;
     } else {
-        if (hud.abilityCd) hud.abilityCd.textContent = 'READY';
+        if (hud.laserCd) hud.laserCd.textContent = 'READY';
+    }
+
+    if (playerController.currentState === 'FLYING') {
+        if (hud.flightCd) hud.flightCd.textContent = `VOANDO (${Math.ceil(superFlightTimer)}s)`;
+    } else if (superCooldown > 0) {
+        if (hud.flightCd) hud.flightCd.textContent = `${superCooldown.toFixed(1)}s`;
+    } else {
+        if (hud.flightCd) hud.flightCd.textContent = 'READY';
+    }
+
+    if (hud.buildText) {
+        hud.buildText.textContent = isBuildMode ? `[${buildType}]` : 'CONSTRUIR';
     }
 
     // Pickups bobbing
