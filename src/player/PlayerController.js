@@ -140,7 +140,7 @@ export class PlayerController {
                     this.position.x += step.x;
                     this.position.z += step.z;
 
-                    if ((this.input.getActionJustPressed('jump') || this.input.getAction('jump')) && this.isGrounded) {
+                    if (this.input.getActionJustPressed('jump') && this.isGrounded) {
                         this.height = 1.8;
                         this.velocity.y = this.jumpForce * 1.15;
                         this.isGrounded = false;
@@ -162,13 +162,6 @@ export class PlayerController {
                 update: (dt) => {
                     const moveInput = this._getMovementInput();
                     this._applyMovement(moveInput, this.walkSpeed * 0.9, dt);
-
-                    if (this.input.getActionJustPressed('jump') && this.stamina > 20) {
-                        this.stamina -= 20;
-                        return this.setState(PlayerState.GLIDING);
-                    }
-
-                    if (this._checkMantle()) return;
 
                     if (this.isGrounded) {
                         this.velocity.y = 0;
@@ -428,7 +421,7 @@ export class PlayerController {
     }
 
     _checkJump() {
-        if ((this.input.getActionJustPressed('jump') || this.input.getAction('jump')) && (this.isGrounded || this._coyoteTimer > 0)) {
+        if (this.input.getActionJustPressed('jump') && (this.isGrounded || this._coyoteTimer > 0)) {
             this.velocity.y = this.jumpForce;
             this.isGrounded = false;
             this._coyoteTimer = 0;
@@ -440,19 +433,6 @@ export class PlayerController {
     }
 
     _checkMantle() {
-        if (this.currentState === PlayerState.MANTLING) return false;
-        
-        this.raycaster.set(this.position, this.facingDirection, 0, 1.0);
-        const hits = this.raycaster.intersectObjects(this.scene.children, true);
-        
-        if (hits.length > 0 && !this.isGrounded) {
-            const hit = hits[0];
-            if (hit.point.y > this.position.y && hit.point.y - this.position.y < 1.5) {
-                this._mantleTargetPos.copy(hit.point).add(new THREE.Vector3(0, 1.8, 0));
-                this.setState(PlayerState.MANTLING);
-                return true;
-            }
-        }
         return false;
     }
 
@@ -466,26 +446,26 @@ export class PlayerController {
             return;
         }
 
-        let groundY = -999;
+        let groundY = 0;
         if (this.getGroundHeight) {
             groundY = this.getGroundHeight(this.position.x, this.position.z);
         }
 
-        // Check solid platform surfaces (placed floors, crates, obstacle tops)
+        // Check ONLY real bounded box surfaces (placed floors, ramps, car roofs, crates) — NEVER unbounded cylinders!
         if (this.obstacles && this.obstacles.length > 0) {
             const px = this.position.x;
             const pz = this.position.z;
             const py = this.position.y;
             for (let i = 0; i < this.obstacles.length; i++) {
                 const ob = this.obstacles[i];
-                const minX = ob.minX ?? (ob.min?.x ?? -999);
-                const maxX = ob.maxX ?? (ob.max?.x ?? 999);
-                const minZ = ob.minZ ?? (ob.min?.z ?? -999);
-                const maxZ = ob.maxZ ?? (ob.max?.z ?? 999);
-                const topY = ob.maxY ?? (ob.max?.y ?? (ob.center ? ob.center.y + (ob.height || 0) : -999));
+                if (ob.type === 'cylinder') continue;
+                if (ob.minX === undefined || ob.maxX === undefined || ob.minZ === undefined || ob.maxZ === undefined) continue;
+                const topY = ob.maxY;
+                if (topY === undefined) continue;
 
-                if (px >= minX && px <= maxX && pz >= minZ && pz <= maxZ) {
-                    if (topY <= py + 0.35 && topY > groundY) {
+                // Must be strictly inside horizontal footprint and feet near or above top surface
+                if (px >= ob.minX + 0.05 && px <= ob.maxX - 0.05 && pz >= ob.minZ + 0.05 && pz <= ob.maxZ - 0.05) {
+                    if (topY <= py + 0.45 && topY > groundY) {
                         groundY = topY;
                     }
                 }
@@ -493,7 +473,7 @@ export class PlayerController {
         }
 
         const targetY = groundY;
-        if (this.position.y <= targetY + 0.15) {
+        if (this.position.y <= targetY + 0.12) {
             this.isGrounded = true;
             this._coyoteTimer = this.coyoteTime;
             this.velocity.y = 0;

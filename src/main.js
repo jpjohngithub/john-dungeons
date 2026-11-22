@@ -29,12 +29,25 @@ class SoundFX {
         this.ctx = null;
     }
     init() {
-        if (!this.ctx) {
-            const AudioCtx = window.AudioContext || window.webkitAudioContext;
-            if (AudioCtx) this.ctx = new AudioCtx();
-        }
-        if (this.ctx && this.ctx.state === 'suspended') {
-            this.ctx.resume();
+        try {
+            if (!this.ctx) {
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                if (AudioCtx) this.ctx = new AudioCtx();
+            }
+            if (this.ctx && this.ctx.state === 'suspended') {
+                this.ctx.resume().catch(() => {});
+            }
+            // Play 1-sample silent buffer to unlock iOS/Safari/Chrome AudioContext reliably
+            if (this.ctx && !this._unlocked) {
+                const buf = this.ctx.createBuffer(1, 1, 22050);
+                const src = this.ctx.createBufferSource();
+                src.buffer = buf;
+                src.connect(this.ctx.destination);
+                src.start(0);
+                this._unlocked = true;
+            }
+        } catch (e) {
+            // Audio unavailable on device; continue silently without crashing
         }
     }
     playShoot() {
@@ -256,22 +269,58 @@ let ghostMaterial = null;
 function init() {
     clock = new THREE.Clock();
 
-    // Setup Renderer
-    renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+    // Setup Renderer with automatic fallback for low-end / mobile / WebGL-restricted devices
+    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+    try {
+        renderer = new THREE.WebGLRenderer({
+            antialias: !isMobile,
+            powerPreference: isMobile ? 'default' : 'high-performance',
+            failIfMajorPerformanceCaveat: false
+        });
+    } catch (e1) {
+        try {
+            renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'default' });
+        } catch (e2) {
+            const ls = document.getElementById('loading-screen');
+            if (ls) ls.innerHTML = '<div style="color:#fff;padding:24px;text-align:center;">WebGL não suportado neste navegador. Ative aceleração de hardware nas configurações.</div>';
+            return;
+        }
+    }
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, isMobile ? 1.5 : 2));
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.25;
+    renderer.toneMappingExposure = 1.2;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
-    document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-    // Setup Scene, Sky Dome & PBR Environment Map
+    const canvasHost = document.getElementById('canvas-container') || document.body;
+    canvasHost.appendChild(renderer.domElement);
+
+    // Handle GPU context loss gracefully (prevents permanent black screen)
+    renderer.domElement.addEventListener('webglcontextlost', (ev) => {
+        ev.preventDefault();
+        showNotification('Restaurando contexto gráfico...');
+    }, false);
+    renderer.domElement.addEventListener('webglcontextrestored', () => {
+        showNotification('Gráficos restaurados!');
+    }, false);
+
+    // Unlock Web Audio on first user interaction anywhere
+    const unlockAudioOnce = () => { sfx.init(); };
+    window.addEventListener('pointerdown', unlockAudioOnce, { passive: true });
+    window.addEventListener('keydown', unlockAudioOnce, { passive: true });
+    window.addEventListener('touchstart', unlockAudioOnce, { passive: true });
+
+    // Setup Scene, Sky Dome & Safe PBR Environment Map
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x93c5fd);
     scene.fog = new THREE.FogExp2(0xbbe1fa, 0.0022);
-    scene.environment = ProceduralTextures.createEnvMap(renderer);
+    try {
+        scene.environment = ProceduralTextures.createEnvMap(renderer);
+    } catch (envErr) {
+        console.warn('EnvMap fallback:', envErr);
+    }
     scene.add(ProceduralTextures.createSkyDome());
     camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 2000);
 
@@ -279,7 +328,7 @@ function init() {
     const sunLight = new THREE.DirectionalLight(0xfff7ed, 2.4);
     sunLight.position.set(85, 120, 65);
     sunLight.castShadow = true;
-    sunLight.shadow.mapSize.set(2048, 2048);
+    sunLight.shadow.mapSize.set(1024, 1024);
     sunLight.shadow.camera.left = -110;
     sunLight.shadow.camera.right = 110;
     sunLight.shadow.camera.top = 110;
@@ -759,11 +808,49 @@ function createBullet(from, to, isPlayer = true) {
 function updateBullets(dt) {
     for (let i = bullets.length - 1; i >= 0; i--) {
         const b = bullets[i];
+        const prevPos = b.mesh.position.clone();
         b.mesh.position.addScaledVector(b.dir, b.speed * dt);
+        const curPos = b.mesh.position;
         b.lifetime -= dt;
 
-        // Check player hit if bullet is from enemy
-        if (!b.isPlayer && b.mesh.position.distanceTo(playerController.position.clone().add(new THREE.Vector3(0, 1.2, 0))) < 1.0) {
+        // 1. Check solid collision against player-built structures & city buildings/obstacles
+        let blocked = false;
+        for (let oi = allObstacles.length - 1; oi >= 0; oi--) {
+            const ob = allObstacles[oi];
+            if (ob.type === 'cylinder') continue;
+            if (ob.minX === undefined || ob.maxX === undefined) continue;
+            // Sample midpoint + endpoint to prevent bullet tunneling through thin walls
+            const mx = (prevPos.x + curPos.x) * 0.5;
+            const my = (prevPos.y + curPos.y) * 0.5;
+            const mz = (prevPos.z + curPos.z) * 0.5;
+            const hitCur = (curPos.x >= ob.minX && curPos.x <= ob.maxX && curPos.y >= ob.minY && curPos.y <= ob.maxY && curPos.z >= ob.minZ && curPos.z <= ob.maxZ);
+            const hitMid = (mx >= ob.minX && mx <= ob.maxX && my >= ob.minY && my <= ob.maxY && mz >= ob.minZ && mz <= ob.maxZ);
+            if (hitCur || hitMid) {
+                blocked = true;
+                spawnExplosionParticles(curPos, 0x94a3b8);
+                // If it's a player-built structure, absorb damage & break when HP reaches 0
+                if (ob.structureMesh && ob.hp !== undefined) {
+                    ob.hp -= 20;
+                    ob.structureMesh.scale.multiplyScalar(0.985);
+                    if (ob.hp <= 0) {
+                        scene.remove(ob.structureMesh);
+                        const sIdx = placedStructures.indexOf(ob.structureMesh);
+                        if (sIdx !== -1) placedStructures.splice(sIdx, 1);
+                        allObstacles.splice(oi, 1);
+                        sfx.playExplosion();
+                    }
+                }
+                break;
+            }
+        }
+        if (blocked) {
+            scene.remove(b.mesh);
+            bullets.splice(i, 1);
+            continue;
+        }
+
+        // 2. Check player hit if bullet is from enemy
+        if (!b.isPlayer && curPos.distanceTo(playerController.position.clone().add(new THREE.Vector3(0, 1.0, 0))) < 0.95) {
             applyDamageToPlayer(12);
             scene.remove(b.mesh);
             bullets.splice(i, 1);
@@ -1342,35 +1429,11 @@ function placeStructure() {
     });
 
     if (buildType === 'WALL') {
-        geo = new THREE.BoxGeometry(3.2, 2.8, 0.35);
-        collider = {
-            type: 'box',
-            min: new THREE.Vector3(pos.x - 1.6, pos.y - 1.4, pos.z - 1.6),
-            max: new THREE.Vector3(pos.x + 1.6, pos.y + 1.4, pos.z + 1.6),
-            minX: pos.x - 1.6, maxX: pos.x + 1.6,
-            minZ: pos.z - 1.6, maxZ: pos.z + 1.6,
-            minY: pos.y - 1.4, maxY: pos.y + 1.4
-        };
+        geo = new THREE.BoxGeometry(3.4, 2.8, 0.45);
     } else if (buildType === 'RAMP') {
-        geo = new THREE.BoxGeometry(3.2, 0.25, 4.0);
-        collider = {
-            type: 'box',
-            min: new THREE.Vector3(pos.x - 1.6, pos.y - 1.2, pos.z - 1.6),
-            max: new THREE.Vector3(pos.x + 1.6, pos.y + 1.2, pos.z + 1.6),
-            minX: pos.x - 1.6, maxX: pos.x + 1.6,
-            minZ: pos.z - 1.6, maxZ: pos.z + 1.6,
-            minY: pos.y - 1.2, maxY: pos.y + 1.2
-        };
+        geo = new THREE.BoxGeometry(3.4, 0.3, 4.0);
     } else {
-        geo = new THREE.BoxGeometry(3.2, 0.25, 3.2);
-        collider = {
-            type: 'box',
-            min: new THREE.Vector3(pos.x - 1.6, pos.y - 0.2, pos.z - 1.6),
-            max: new THREE.Vector3(pos.x + 1.6, pos.y + 0.2, pos.z + 1.6),
-            minX: pos.x - 1.6, maxX: pos.x + 1.6,
-            minZ: pos.z - 1.6, maxZ: pos.z + 1.6,
-            minY: pos.y - 0.2, maxY: pos.y + 0.2
-        };
+        geo = new THREE.BoxGeometry(3.4, 0.3, 3.4);
     }
 
     const structureMesh = new THREE.Mesh(geo, mat);
@@ -1378,6 +1441,18 @@ function placeStructure() {
     structureMesh.rotation.y = rotY;
     structureMesh.rotation.x = rotX;
     structureMesh.castShadow = true;
+    structureMesh.updateMatrixWorld(true);
+
+    // Exact world-space AABB collider matching rotated wall/ramp/floor + HP to block bullets
+    const bbox = new THREE.Box3().setFromObject(structureMesh);
+    collider = {
+        type: 'box',
+        minX: bbox.min.x, maxX: bbox.max.x,
+        minY: bbox.min.y, maxY: bbox.max.y,
+        minZ: bbox.min.z, maxZ: bbox.max.z,
+        hp: 150,
+        structureMesh
+    };
     structureMesh.receiveShadow = true;
     scene.add(structureMesh);
 
@@ -1894,6 +1969,7 @@ function createLobbyUI() {
     });
 
     document.getElementById('btn-start-game').addEventListener('click', () => {
+        if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
         sfx.init();
         sfx.playFlight();
         gameStarted = true;
@@ -2054,6 +2130,7 @@ function animate() {
         CharacterModel.updateAnimation(playerGroup, 'LOBBY_IDLE', dt);
         camera.position.set(-0.95, 1.32, 3.55);
         camera.lookAt(-0.55, 1.02, 0);
+        inputManager.update();
         renderer.render(scene, camera);
         return;
     }
