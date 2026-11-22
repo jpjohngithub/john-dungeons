@@ -20,6 +20,7 @@ import { StylizedPBRMaterial } from './rendering/StylizedPBRMaterial.js';
 import { DayNightCycle } from './rendering/DayNightCycle.js';
 import StormManager from './battleroyale/StormManager.js';
 import { CityBuilder } from './battleroyale/CityBuilder.js';
+import { ProceduralTextures } from './rendering/ProceduralTextures.js';
 import { AttributeSet } from './gas/AttributeSet.js';
 
 // ─── AUDIO SYNTHESIZER (ZERO ASSET DEPENDENCY) ──────────────────────
@@ -266,30 +267,32 @@ function init() {
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     document.getElementById('canvas-container').appendChild(renderer.domElement);
 
-    // Setup Scene & Camera
+    // Setup Scene, Sky Dome & PBR Environment Map
     scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x87CEEB);
-    scene.fog = new THREE.FogExp2(0x87CEEB, 0.0035);
-    camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 2500);
+    scene.background = new THREE.Color(0x93c5fd);
+    scene.fog = new THREE.FogExp2(0xbbe1fa, 0.0022);
+    scene.environment = ProceduralTextures.createEnvMap(renderer);
+    scene.add(ProceduralTextures.createSkyDome());
+    camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, 2000);
 
-    // Lighting
-    const sunLight = new THREE.DirectionalLight(0xffffff, 2.2);
-    sunLight.position.set(70, 100, 40);
+    // Balanced AAA Daylight Lighting (Eliminates dark crushed shadows on buildings)
+    const sunLight = new THREE.DirectionalLight(0xfff7ed, 2.4);
+    sunLight.position.set(85, 120, 65);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.set(2048, 2048);
-    sunLight.shadow.camera.left = -100;
-    sunLight.shadow.camera.right = 100;
-    sunLight.shadow.camera.top = 100;
-    sunLight.shadow.camera.bottom = -100;
-    sunLight.shadow.camera.near = 0.5;
-    sunLight.shadow.camera.far = 300;
-    sunLight.shadow.bias = -0.001;
+    sunLight.shadow.camera.left = -110;
+    sunLight.shadow.camera.right = 110;
+    sunLight.shadow.camera.top = 110;
+    sunLight.shadow.camera.bottom = -110;
+    sunLight.shadow.camera.near = 1;
+    sunLight.shadow.camera.far = 340;
+    sunLight.shadow.bias = -0.0008;
     scene.add(sunLight);
 
-    const ambientLight = new THREE.AmbientLight(0x6688cc, 0.6);
+    const ambientLight = new THREE.AmbientLight(0xdbeafe, 0.95);
     scene.add(ambientLight);
 
-    const hemiLight = new THREE.HemisphereLight(0x88bbff, 0x445522, 0.6);
+    const hemiLight = new THREE.HemisphereLight(0xbae6fd, 0x64748b, 1.05);
     scene.add(hemiLight);
 
     dayNight = new DayNightCycle({ sunLight, ambientLight, cycleDuration: 240 });
@@ -462,6 +465,7 @@ function createVegetation(bushCount, grassCount) {
     for (let i = 0; i < bushCount; i++) {
         const x = (Math.random() - 0.5) * 380;
         const z = (Math.random() - 0.5) * 380;
+        if (Math.hypot(x, z) < 106) continue;
         const y = getTerrainHeight(x, z);
         if (y < -1 || y > 9) continue;
 
@@ -491,6 +495,7 @@ function createVegetation(bushCount, grassCount) {
     for (let i = 0; i < grassCount; i++) {
         const x = (Math.random() - 0.5) * 360;
         const z = (Math.random() - 0.5) * 360;
+        if (Math.hypot(x, z) < 106) continue;
         const y = getTerrainHeight(x, z);
         if (y < -1 || y > 8) continue;
 
@@ -535,6 +540,7 @@ function createTrees(count) {
     for (let i = 0; i < count; i++) {
         const x = (Math.random() - 0.5) * 420;
         const z = (Math.random() - 0.5) * 420;
+        if (Math.hypot(x, z) < 106) continue;
         const y = getTerrainHeight(x, z);
         if (y < -1 || y > 10) continue;
 
@@ -561,6 +567,7 @@ function createRocks(count) {
     for (let i = 0; i < count; i++) {
         const x = (Math.random() - 0.5) * 400;
         const z = (Math.random() - 0.5) * 400;
+        if (Math.hypot(x, z) < 106) continue;
         const y = getTerrainHeight(x, z);
         if (y < -1) continue;
 
@@ -582,6 +589,7 @@ function createPickups(count) {
     for (let i = 0; i < count; i++) {
         const x = (Math.random() - 0.5) * 360;
         const z = (Math.random() - 0.5) * 360;
+        if (Math.hypot(x, z) < 106) continue;
         const y = getTerrainHeight(x, z);
         if (y < -1) continue;
 
@@ -601,7 +609,7 @@ function createPickups(count) {
 function createPlayer(charType = selectedCharacter) {
     if (playerGroup) scene.remove(playerGroup);
     playerGroup = CharacterModel.createHero({ characterType: charType });
-    playerGroup.position.set(0, getTerrainHeight(0, 0) + 0.1, 0);
+    playerGroup.position.set(0, getTerrainHeight(0, 0), 0);
     scene.add(playerGroup);
     if (cameraController) cameraController.attach(playerGroup);
 }
@@ -1679,74 +1687,146 @@ function createHUD() {
     };
 }
 
+let lobbyYawOffset = 0.25;
+let isDraggingLobby = false;
+let lobbyLastX = 0;
+
 function createLobbyUI() {
     const lobby = document.createElement('div');
     lobby.id = 'start-lobby-menu';
+
+    const heroMeta = {
+        CYBER_STRIKER: {
+            title: 'CYBER-STRIKER',
+            role: 'ASSALTO AÉREO',
+            color: '#38bdf8',
+            hp: 75, spd: 85, pwr: 90,
+            ab1: 'PLASMA LASER', ab1Desc: 'Feixe contínuo de alta energia pela mão esquerda',
+            ab2: 'SUPER VOO', ab2Desc: 'Propulsão a jato com asas articuladas',
+            lore: 'Unidade Valquíria equipada com asas propulsoras e emissor de plasma integrado.'
+        },
+        TITAN_BRAWLER: {
+            title: 'TITAN BRAWLER',
+            role: 'TANQUE PESADO',
+            color: '#f59e0b',
+            hp: 100, spd: 60, pwr: 95,
+            ab1: 'MICRO-MÍSSEIS', ab1Desc: 'Salva de 4 mísseis teleguiados dos ombros',
+            ab2: 'IMPACTO SÍSMICO', ab2Desc: 'Salto propulsado com onda de choque em área',
+            lore: 'Exoesqueleto blindado Juggernaut com autocannon rotativo e reator central.'
+        },
+        GHOST_RECON: {
+            title: 'GHOST RECON',
+            role: 'FURTIVO / VELOZ',
+            color: '#ef4444',
+            hp: 65, spd: 100, pwr: 85,
+            ab1: 'SHADOW BLINK', ab1Desc: 'Teleporte tático instantâneo de 14m',
+            ab2: 'CHRONO STEALTH', ab2Desc: 'Camuflagem óptica + velocidade dobrada',
+            lore: 'Cyber-Shinobi de infiltração armada com katanas de energia e SMG silenciada.'
+        }
+    };
+
     lobby.innerHTML = `
-        <div style="position:fixed;top:0;left:0;width:100vw;height:100vh;background:linear-gradient(90deg, rgba(8,12,24,0.92) 0%, rgba(8,12,24,0.82) 48%, rgba(8,12,24,0.18) 100%);backdrop-filter:blur(6px);z-index:99;display:flex;align-items:center;padding-left:48px;font-family:system-ui,-apple-system,sans-serif;color:#fff;box-sizing:border-box;">
-            <div style="max-width:540px;width:100%;display:flex;flex-direction:column;gap:18px;">
-                <div style="border-bottom:1px solid rgba(255,255,255,0.12);padding-bottom:14px;">
-                    <div style="display:inline-block;background:rgba(56,189,248,0.15);border:1px solid rgba(56,189,248,0.4);border-radius:4px;padding:3px 10px;font-size:10px;font-weight:800;color:#38bdf8;letter-spacing:2px;margin-bottom:6px;">
-                        TACTICAL OPS // BATTLE ROYALE
-                    </div>
-                    <div style="font-size:32px;font-weight:900;letter-spacing:3px;color:#f8fafc;text-shadow:0 0 25px rgba(56,189,248,0.35);">
-                        JOHN DUNGEONS
-                    </div>
-                    <div style="font-size:12px;color:#94a3b8;letter-spacing:1px;">OPERADOR E CLASSE DE COMBATE</div>
-                </div>
-
+        <style>
+            #start-lobby-menu * { box-sizing: border-box; font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; }
+            .aaa-cut { clip-path: polygon(0 0, calc(100% - 14px) 0, 100% 14px, 100% 100%, 14px 100%, 0 calc(100% - 14px)); }
+            .aaa-hero-btn {
+                cursor: pointer; background: rgba(15,23,42,0.72); border: 1px solid rgba(255,255,255,0.12);
+                border-left: 4px solid rgba(255,255,255,0.2); padding: 12px 16px; transition: all 0.2s ease;
+                display: flex; justify-content: space-between; align-items: center;
+            }
+            .aaa-hero-btn:hover { background: rgba(30,41,59,0.88); transform: translateX(4px); }
+            .aaa-hero-btn.active { background: rgba(15,23,42,0.95); border-color: rgba(255,255,255,0.28); transform: translateX(6px); }
+            .aaa-class-pill {
+                cursor: pointer; flex: 1; padding: 10px 8px; text-align: center;
+                background: rgba(15,23,42,0.7); border: 1px solid rgba(255,255,255,0.12);
+                transition: all 0.18s;
+            }
+            .aaa-class-pill.active { background: rgba(56,189,248,0.2); border-color: #38bdf8; }
+            .aaa-play-btn {
+                cursor: pointer; border: none; padding: 18px 46px; font-size: 16px; font-weight: 900;
+                letter-spacing: 3px; color: #020617; background: linear-gradient(135deg, #38bdf8 0%, #7dd3fc 100%);
+                box-shadow: 0 0 32px rgba(56,189,248,0.45); transition: all 0.2s;
+            }
+            .aaa-play-btn:hover { transform: scale(1.03); box-shadow: 0 0 46px rgba(56,189,248,0.7); }
+        </style>
+        <div id="lobby-backdrop" style="position:fixed;inset:0;z-index:99;pointer-events:auto;background:linear-gradient(90deg, rgba(2,6,23,0.92) 0%, rgba(2,6,23,0.72) 40%, rgba(2,6,23,0.08) 68%, rgba(2,6,23,0.25) 100%);display:flex;justify-content:space-between;padding:32px 44px;color:#f8fafc;">
+            <!-- LEFT COMMAND PANEL -->
+            <div style="width:430px;max-width:46vw;display:flex;flex-direction:column;justify-content:space-between;gap:16px;">
                 <div>
-                    <div style="font-size:11px;font-weight:800;letter-spacing:1.8px;color:#94a3b8;margin-bottom:8px;">SELECIONE SEU PERSONAGEM</div>
-                    <div style="display:flex;flex-direction:column;gap:8px;" id="char-selector-grid">
-                        <div class="char-card active" data-char="CYBER_STRIKER" style="cursor:pointer;background:rgba(15,23,42,0.85);border:2px solid #38bdf8;border-radius:10px;padding:12px 16px;transition:all 0.2s;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <div style="font-size:14px;font-weight:800;color:#38bdf8;">CYBER-STRIKER</div>
-                                <span style="font-size:10px;background:rgba(56,189,248,0.2);color:#38bdf8;padding:2px 8px;border-radius:4px;font-weight:700;">ASAS A JATO</span>
-                            </div>
-                            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">Ciborgue com Plasma Laser de mão ([1]/[Q]) e Super Voo ([E]/[4]).</div>
-                        </div>
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+                        <span style="width:8px;height:8px;background:#38bdf8;box-shadow:0 0 10px #38bdf8;display:inline-block;"></span>
+                        <span style="font-size:11px;font-weight:800;letter-spacing:3px;color:#38bdf8;">SEASON 01 // METRO ARENA</span>
+                    </div>
+                    <div style="font-size:38px;font-weight:900;letter-spacing:4px;line-height:1;color:#ffffff;text-shadow:0 4px 24px rgba(56,189,248,0.35);">JOHN DUNGEONS</div>
+                    <div style="font-size:12px;color:#94a3b8;letter-spacing:1.5px;margin-top:6px;">ESCOLHA SEU OPERADOR PARA O COMBATE</div>
+                </div>
 
-                        <div class="char-card" data-char="TITAN_BRAWLER" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:12px 16px;transition:all 0.2s;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <div style="font-size:14px;font-weight:800;color:#f59e0b;">TITAN BRAWLER</div>
-                                <span style="font-size:10px;background:rgba(245,158,11,0.2);color:#f59e0b;padding:2px 8px;border-radius:4px;font-weight:700;">MECH PESADO</span>
-                            </div>
-                            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">Pods de Micro-Mísseis de Ombro ([1]/[Q]) e Salto Sísmico ([E]/[4]).</div>
+                <!-- HERO SELECTOR -->
+                <div style="display:flex;flex-direction:column;gap:8px;" id="char-selector-grid">
+                    <div class="aaa-hero-btn aaa-cut active" data-char="CYBER_STRIKER" style="border-left-color:#38bdf8;">
+                        <div>
+                            <div style="font-size:15px;font-weight:900;letter-spacing:1.5px;color:#38bdf8;">CYBER-STRIKER</div>
+                            <div style="font-size:11px;color:#94a3b8;margin-top:2px;">ASSALTO AÉREO • LASER + VOO</div>
                         </div>
-
-                        <div class="char-card" data-char="GHOST_RECON" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:10px;padding:12px 16px;transition:all 0.2s;">
-                            <div style="display:flex;justify-content:space-between;align-items:center;">
-                                <div style="font-size:14px;font-weight:800;color:#ef4444;">GHOST RECON</div>
-                                <span style="font-size:10px;background:rgba(239,68,68,0.2);color:#ef4444;padding:2px 8px;border-radius:4px;font-weight:700;">NINJA CYBER</span>
-                            </div>
-                            <div style="font-size:11px;color:#cbd5e1;margin-top:4px;">Shadow Blink ([1]/[Q]) e Camuflagem Chrono Stealth ([E]/[4]).</div>
+                        <span style="font-size:10px;font-weight:800;color:#38bdf8;letter-spacing:1px;">01</span>
+                    </div>
+                    <div class="aaa-hero-btn aaa-cut" data-char="TITAN_BRAWLER" style="border-left-color:#f59e0b;">
+                        <div>
+                            <div style="font-size:15px;font-weight:900;letter-spacing:1.5px;color:#f59e0b;">TITAN BRAWLER</div>
+                            <div style="font-size:11px;color:#94a3b8;margin-top:2px;">MECH PESADO • MÍSSEIS + SLAM</div>
                         </div>
+                        <span style="font-size:10px;font-weight:800;color:#f59e0b;letter-spacing:1px;">02</span>
+                    </div>
+                    <div class="aaa-hero-btn aaa-cut" data-char="GHOST_RECON" style="border-left-color:#ef4444;">
+                        <div>
+                            <div style="font-size:15px;font-weight:900;letter-spacing:1.5px;color:#ef4444;">GHOST RECON</div>
+                            <div style="font-size:11px;color:#94a3b8;margin-top:2px;">CYBER-NINJA • BLINK + STEALTH</div>
+                        </div>
+                        <span style="font-size:10px;font-weight:800;color:#ef4444;letter-spacing:1px;">03</span>
                     </div>
                 </div>
 
+                <!-- LIVE HERO DOSSIER & STATS -->
+                <div class="aaa-cut" style="background:rgba(15,23,42,0.82);border:1px solid rgba(255,255,255,0.1);padding:16px 18px;">
+                    <div id="lobby-hero-lore" style="font-size:12px;color:#cbd5e1;line-height:1.45;margin-bottom:12px;"></div>
+                    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+                        <div style="background:rgba(2,6,23,0.6);padding:8px 10px;border-left:2px solid #38bdf8;" id="lobby-ab1-box">
+                            <div style="font-size:10px;color:#94a3b8;font-weight:700;">[1 / Q] HABILIDADE</div>
+                            <div id="lobby-ab1-name" style="font-size:12px;font-weight:800;color:#fff;margin-top:2px;"></div>
+                        </div>
+                        <div style="background:rgba(2,6,23,0.6);padding:8px 10px;border-left:2px solid #a855f7;" id="lobby-ab2-box">
+                            <div style="font-size:10px;color:#94a3b8;font-weight:700;">[E / 4] SUPER</div>
+                            <div id="lobby-ab2-name" style="font-size:12px;font-weight:800;color:#fff;margin-top:2px;"></div>
+                        </div>
+                    </div>
+                    <div style="display:flex;flex-direction:column;gap:6px;font-size:10px;font-weight:800;letter-spacing:1px;color:#94a3b8;">
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:70px;">BLINDAGEM</span><div style="flex:1;height:5px;background:#1e293b;"><div id="stat-hp" style="height:100%;background:#10b981;transition:width 0.3s;"></div></div></div>
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:70px;">AGILIDADE</span><div style="flex:1;height:5px;background:#1e293b;"><div id="stat-spd" style="height:100%;background:#38bdf8;transition:width 0.3s;"></div></div></div>
+                        <div style="display:flex;align-items:center;gap:8px;"><span style="width:70px;">PODER</span><div style="flex:1;height:5px;background:#1e293b;"><div id="stat-pwr" style="height:100%;background:#f59e0b;transition:width 0.3s;"></div></div></div>
+                    </div>
+                </div>
+
+                <!-- TACTICAL CLASS -->
                 <div>
-                    <div style="font-size:11px;font-weight:800;letter-spacing:1.8px;color:#94a3b8;margin-bottom:8px;">CLASSE TÁTICA</div>
-                    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;" id="class-selector-grid">
-                        <div class="class-card active" data-class="ASSAULT" style="cursor:pointer;background:rgba(15,23,42,0.85);border:2px solid #38bdf8;border-radius:8px;padding:10px;text-align:center;transition:all 0.2s;">
-                            <div style="font-size:12px;font-weight:800;color:#38bdf8;">ASSAULT</div>
-                            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">+25% Dano</div>
-                        </div>
-                        <div class="class-card" data-class="VANGUARD" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px;text-align:center;transition:all 0.2s;">
-                            <div style="font-size:12px;font-weight:800;color:#10b981;">VANGUARD</div>
-                            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">+75 Escudo</div>
-                        </div>
-                        <div class="class-card" data-class="SCOUT" style="cursor:pointer;background:rgba(15,23,42,0.5);border:2px solid rgba(255,255,255,0.1);border-radius:8px;padding:10px;text-align:center;transition:all 0.2s;">
-                            <div style="font-size:12px;font-weight:800;color:#facc15;">SCOUT</div>
-                            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">+30% Velocidade</div>
-                        </div>
+                    <div style="font-size:10px;font-weight:800;letter-spacing:2px;color:#94a3b8;margin-bottom:6px;">PERK DE CLASSE</div>
+                    <div style="display:flex;gap:8px;" id="class-selector-grid">
+                        <div class="aaa-class-pill aaa-cut active" data-class="ASSAULT"><div style="font-size:12px;font-weight:800;color:#38bdf8;">ASSAULT</div><div style="font-size:10px;color:#94a3b8;">+25% Dano</div></div>
+                        <div class="aaa-class-pill aaa-cut" data-class="VANGUARD"><div style="font-size:12px;font-weight:800;color:#10b981;">VANGUARD</div><div style="font-size:10px;color:#94a3b8;">+75 Escudo</div></div>
+                        <div class="aaa-class-pill aaa-cut" data-class="SCOUT"><div style="font-size:12px;font-weight:800;color:#facc15;">SCOUT</div><div style="font-size:10px;color:#94a3b8;">+30% Vel.</div></div>
                     </div>
                 </div>
+            </div>
 
-                <div style="margin-top:8px;">
-                    <button id="btn-start-game" style="width:100%;background:linear-gradient(90deg,#0284c7,#38bdf8);border:none;border-radius:10px;padding:16px;font-size:15px;font-weight:900;letter-spacing:2px;color:#ffffff;cursor:pointer;box-shadow:0 8px 24px rgba(56,189,248,0.4);transition:all 0.2s;">
-                        INICIAR PARTIDA
-                    </button>
-                    <div style="font-size:11px;color:#64748b;text-align:center;margin-top:8px;">[ESPAÇO] PULAR • [CTRL / C] DESLIZAR • [WASD] MOVER</div>
+            <!-- RIGHT BOTTOM CTA & ROTATE HINT -->
+            <div style="display:flex;flex-direction:column;justify-content:space-between;align-items:flex-end;pointer-events:none;">
+                <div style="background:rgba(15,23,42,0.72);border:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px;font-weight:700;letter-spacing:1.5px;color:#cbd5e1;" class="aaa-cut">
+                    ARRASTE PARA GIRAR O PERSONAGEM
+                </div>
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;pointer-events:auto;">
+                    <div style="font-size:11px;color:#cbd5e1;letter-spacing:1px;background:rgba(2,6,23,0.7);padding:6px 12px;border-radius:4px;">
+                        [WASD] MOVER • [ESPAÇO] PULAR • [C / CTRL] DESLIZAR • [F] CONSTRUIR
+                    </div>
+                    <button id="btn-start-game" class="aaa-play-btn aaa-cut">INICIAR PARTIDA</button>
                 </div>
             </div>
         </div>
@@ -1754,52 +1834,64 @@ function createLobbyUI() {
 
     document.body.appendChild(lobby);
 
-    const charColors = {
-        'CYBER_STRIKER': 0x38bdf8,
-        'TITAN_BRAWLER': 0xf59e0b,
-        'GHOST_RECON': 0xef4444
+    const updateDossier = (charType) => {
+        const m = heroMeta[charType] || heroMeta.CYBER_STRIKER;
+        document.getElementById('lobby-hero-lore').textContent = m.lore;
+        document.getElementById('lobby-ab1-name').textContent = m.ab1;
+        document.getElementById('lobby-ab2-name').textContent = m.ab2;
+        document.getElementById('lobby-ab1-box').style.borderLeftColor = m.color;
+        document.getElementById('stat-hp').style.width = m.hp + '%';
+        document.getElementById('stat-spd').style.width = m.spd + '%';
+        document.getElementById('stat-pwr').style.width = m.pwr + '%';
     };
+    updateDossier(selectedCharacter);
 
-    const charCards = lobby.querySelectorAll('.char-card');
+    // Drag to rotate hero in lobby
+    const backdrop = document.getElementById('lobby-backdrop');
+    backdrop.addEventListener('mousedown', (e) => {
+        if (e.target === backdrop) {
+            isDraggingLobby = true;
+            lobbyLastX = e.clientX;
+        }
+    });
+    window.addEventListener('mousemove', (e) => {
+        if (!gameStarted && isDraggingLobby) {
+            lobbyYawOffset += (e.clientX - lobbyLastX) * 0.01;
+            lobbyLastX = e.clientX;
+        }
+    });
+    window.addEventListener('mouseup', () => { isDraggingLobby = false; });
+
+    const charColors = { CYBER_STRIKER: 0x38bdf8, TITAN_BRAWLER: 0xf59e0b, GHOST_RECON: 0xef4444 };
+    const charCards = lobby.querySelectorAll('.aaa-hero-btn');
     charCards.forEach((card) => {
         card.addEventListener('click', () => {
             const charType = card.getAttribute('data-char');
             selectedCharacter = charType;
-            const themeColor = charColors[charType] || 0x38bdf8;
-
-            charCards.forEach((c) => {
-                c.style.borderColor = 'rgba(255,255,255,0.1)';
-                c.style.background = 'rgba(15,23,42,0.5)';
-            });
-            card.style.borderColor = '#' + themeColor.toString(16).padStart(6, '0');
-            card.style.background = 'rgba(15,23,42,0.9)';
-
+            charCards.forEach((c) => c.classList.remove('active'));
+            card.classList.add('active');
             createPlayer(selectedCharacter);
-
-            // Update Pedestal Ring Color
+            updateDossier(selectedCharacter);
             if (lobbyPedestal && lobbyPedestal.children[1]) {
-                lobbyPedestal.children[1].material.color.setHex(themeColor);
+                lobbyPedestal.children[1].material.color.setHex(charColors[charType] || 0x38bdf8);
             }
+            sfx.init();
             sfx.playPickup();
         });
     });
 
-    const classCards = lobby.querySelectorAll('.class-card');
+    const classCards = lobby.querySelectorAll('.aaa-class-pill');
     classCards.forEach((card) => {
         card.addEventListener('click', () => {
-            classCards.forEach((c) => {
-                c.style.borderColor = 'rgba(255,255,255,0.1)';
-                c.style.background = 'rgba(15,23,42,0.5)';
-            });
-            card.style.borderColor = '#38bdf8';
-            card.style.background = 'rgba(15,23,42,0.9)';
+            classCards.forEach((c) => c.classList.remove('active'));
+            card.classList.add('active');
             selectedClass = card.getAttribute('data-class');
+            sfx.init();
             sfx.playPickup();
         });
     });
 
-    const startBtn = document.getElementById('btn-start-game');
-    startBtn.addEventListener('click', () => {
+    document.getElementById('btn-start-game').addEventListener('click', () => {
         sfx.init();
         sfx.playFlight();
         gameStarted = true;
@@ -1808,15 +1900,19 @@ function createLobbyUI() {
         if (lobbyPedestal) lobbyPedestal.visible = false;
         if (lobbySpotLight) lobbySpotLight.visible = false;
 
-        // Position player in combat zone
-        playerController.position.set(0, getTerrainHeight(0, 0) + 1.0, 0);
+        // Place feet cleanly on ground at (0, 0, 0) facing forward (-Z, back to camera)
+        playerController.position.set(0, getTerrainHeight(0, 0), 0);
         playerController.velocity.set(0, 0, 0);
+        playerController.rotation.setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+        playerController.facingDirection.set(0, 0, -1);
+        cameraController.yaw = 0;
+        cameraController.pitch = 0.14;
 
         if (selectedClass === 'VANGUARD') {
             playerAttributes.modify('shield', 100, 'override');
         } else if (selectedClass === 'SCOUT') {
-            playerController.walkSpeed = 5.2;
-            playerController.sprintSpeed = 9.2;
+            playerController.walkSpeed = 5.4;
+            playerController.sprintSpeed = 9.4;
         }
 
         renderer.domElement.requestPointerLock();
@@ -1946,13 +2042,14 @@ function animate() {
 
     if (!pointerLocked) inputManager.mouse.delta.set(0, 0);
 
-    // Lobby Presentation Mode
+    // Lobby Presentation Mode (Hero framed on right side, full body from boots to helmet)
     if (!gameStarted) {
         playerGroup.position.set(0, 0.19, 0);
-        playerGroup.rotation.y = time * 0.45;
-        CharacterModel.updateAnimation(playerGroup, 'IDLE', dt);
-        camera.position.set(0.65, 1.35, 3.1);
-        camera.lookAt(0, 1.05, 0);
+        if (!isDraggingLobby) lobbyYawOffset += dt * 0.28;
+        playerGroup.rotation.set(0, lobbyYawOffset, 0);
+        CharacterModel.updateAnimation(playerGroup, 'LOBBY_IDLE', dt);
+        camera.position.set(-0.95, 1.32, 3.55);
+        camera.lookAt(-0.55, 1.02, 0);
         renderer.render(scene, camera);
         return;
     }
@@ -1969,9 +2066,9 @@ function animate() {
             spawnWaterRipples(playerController.position);
         }
     } else if (playerController.currentState !== 'FLYING') {
-        // Clamp to ground only when falling or grounded, never while ascending on jump!
-        if (playerController.velocity.y <= 0 && playerController.position.y < ty + 0.88) {
-            playerController.position.y = ty + 0.88;
+        // Feet rest cleanly at ty (0.0m offset, zero floating!)
+        if (playerController.velocity.y <= 0 && playerController.position.y < ty) {
+            playerController.position.y = ty;
             playerController.velocity.y = 0;
             playerController.isGrounded = true;
         }

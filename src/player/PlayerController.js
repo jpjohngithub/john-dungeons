@@ -23,10 +23,10 @@ export class PlayerController {
         this.input = inputManager;
         this.scene = scene;
 
-        this.position = new THREE.Vector3(0, 1, 0);
+        this.position = new THREE.Vector3(0, 0, 0);
         this.velocity = new THREE.Vector3();
-        this.rotation = new THREE.Quaternion();
-        this.facingDirection = new THREE.Vector3(0, 0, 1);
+        this.rotation = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI);
+        this.facingDirection = new THREE.Vector3(0, 0, -1);
 
         this.currentState = PlayerState.IDLE;
         this.isGrounded = false;
@@ -160,9 +160,8 @@ export class PlayerController {
             [PlayerState.FALLING]: {
                 enter: () => {},
                 update: (dt) => {
-                    this.velocity.y -= this.gravity * dt;
                     const moveInput = this._getMovementInput();
-                    this._applyMovement(moveInput, this.walkSpeed * 0.8, dt);
+                    this._applyMovement(moveInput, this.walkSpeed * 0.9, dt);
 
                     if (this.input.getActionJustPressed('jump') && this.stamina > 20) {
                         this.stamina -= 20;
@@ -401,11 +400,25 @@ export class PlayerController {
             this.velocity.x = moveDir.x * speed;
             this.velocity.z = moveDir.z * speed;
 
-            this.facingDirection.lerp(moveDir, 0.15).normalize();
-            this.rotation.setFromUnitVectors(new THREE.Vector3(0, 0, 1), this.facingDirection);
+            const targetYaw = Math.atan2(moveDir.x, moveDir.z);
+            const targetQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetYaw);
+            this.rotation.slerp(targetQuat, Math.min(1, dt * 14));
+            this.facingDirection.set(Math.sin(targetYaw), 0, Math.cos(targetYaw)).normalize();
         } else {
-            this.velocity.x *= 0.85;
-            this.velocity.z *= 0.85;
+            this.velocity.x *= 0.82;
+            this.velocity.z *= 0.82;
+
+            // Keep character facing camera forward direction smoothly in TPS combat
+            const camFwd = new THREE.Vector3();
+            this.camera.getWorldDirection(camFwd);
+            camFwd.y = 0;
+            if (camFwd.lengthSq() > 0.001) {
+                camFwd.normalize();
+                const targetYaw = Math.atan2(camFwd.x, camFwd.z);
+                const targetQuat = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), targetYaw);
+                this.rotation.slerp(targetQuat, Math.min(1, dt * 8));
+                this.facingDirection.copy(camFwd);
+            }
         }
 
         const step = new THREE.Vector3(this.velocity.x * dt, 0, this.velocity.z * dt);
@@ -479,8 +492,8 @@ export class PlayerController {
             }
         }
 
-        const targetY = groundY + this.height * 0.5;
-        if (this.position.y <= targetY + 0.25) {
+        const targetY = groundY;
+        if (this.position.y <= targetY + 0.15) {
             this.isGrounded = true;
             this._coyoteTimer = this.coyoteTime;
             this.velocity.y = 0;
