@@ -352,8 +352,10 @@ function init() {
     // Spawn AI Enemies
     spawnEnemies(10);
 
-    // Setup HUD UI & Lobby Menu
+    // Setup HUD UI (hidden during lobby) & Lobby Menu
     createHUD();
+    const hudLayer = document.getElementById('hud-layer');
+    if (hudLayer) hudLayer.style.display = 'none';
     createLobbyUI();
 
     // Listeners
@@ -1822,7 +1824,7 @@ function createLobbyUI() {
                 <div style="background:rgba(15,23,42,0.72);border:1px solid rgba(255,255,255,0.12);padding:8px 14px;font-size:11px;font-weight:700;letter-spacing:1.5px;color:#cbd5e1;" class="aaa-cut">
                     ARRASTE PARA GIRAR O PERSONAGEM
                 </div>
-                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;pointer-events:auto;">
+                <div style="display:flex;flex-direction:column;align-items:flex-end;gap:10px;pointer-events:auto;margin-bottom:28px;">
                     <div style="font-size:11px;color:#cbd5e1;letter-spacing:1px;background:rgba(2,6,23,0.7);padding:6px 12px;border-radius:4px;">
                         [WASD] MOVER • [ESPAÇO] PULAR • [C / CTRL] DESLIZAR • [F] CONSTRUIR
                     </div>
@@ -1896,6 +1898,8 @@ function createLobbyUI() {
         sfx.playFlight();
         gameStarted = true;
         lobby.style.display = 'none';
+        const hudEl = document.getElementById('hud-layer');
+        if (hudEl) hudEl.style.display = 'block';
 
         if (lobbyPedestal) lobbyPedestal.visible = false;
         if (lobbySpotLight) lobbySpotLight.visible = false;
